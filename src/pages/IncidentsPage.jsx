@@ -4,6 +4,7 @@ import StatusSummary from '../components/incidents/StatusSummary.jsx';
 import TrainStatusList from '../components/incidents/TrainStatusList.jsx';
 import TrainDetail from '../components/incidents/TrainDetail.jsx';
 import AlertsPanel from '../components/incidents/AlertsPanel.jsx';
+import CompensationSection from '../components/compensation/CompensationSection.jsx';
 import { STATUSES, useLiveTrains } from '../lib/useLiveTrains.js';
 import { useTrainDetail } from '../lib/useTrainDetail.js';
 import { loadCercaniasTracks, useNetworkData } from '../lib/useNetworkData.js';
@@ -15,6 +16,11 @@ const KINDS = [
   { id: 'cer', label: 'Cercanías' },
 ];
 
+/** Apartados de la pestaña Incidencias. */
+const TABS = [
+  { id: 'live', label: 'Estado en directo' },
+  { id: 'compensaciones', label: 'Compensaciones y derechos' },
+];
 
 /** «Hace 12 s», actualizado cada segundo. */
 function useAgo(timestamp) {
@@ -28,8 +34,12 @@ function useAgo(timestamp) {
   return s < 60 ? `hace ${s} s` : `hace ${Math.floor(s / 60)} min`;
 }
 
-/** Sección «Incidencias»: trenes en tiempo real, seguimiento de un tren, retrasos y avisos. */
+/**
+ * Sección «Incidencias»: trenes en tiempo real, seguimiento de un tren, retrasos y avisos,
+ * y el apartado de compensaciones (calculadora, guía para reclamar y derechos del pasajero).
+ */
 export default function IncidentsPage() {
+  const [tab, setTab] = useState('live');
   const live = useLiveTrains();
   const map = useNetworkData();
   const [statuses, setStatuses] = useState(() => new Set(STATUSES.map((s) => s.id)));
@@ -90,8 +100,8 @@ export default function IncidentsPage() {
         <div>
           <h1>Incidencias en tiempo real</h1>
           <p>
-            Dónde está cada tren ahora mismo, cuáles van con retraso y qué avisos hay en la red. Pulsa un tren para seguir
-            su recorrido en directo.
+            Dónde está cada tren ahora mismo, cuáles van con retraso y qué avisos hay en la red. Pulsa un tren para seguir su
+            recorrido en directo.
           </p>
         </div>
         <div className={`live-badge${live.error ? ' is-error' : ''}`} role="status">
@@ -102,140 +112,176 @@ export default function IncidentsPage() {
         </div>
       </div>
 
-      {live.status === 'error' && (
-        <div className="card placeholder">
-          <h2>No hay conexión con el servidor de datos</h2>
-          <p>
-            Arranca el proyecto con <code>npm run dev</code> (inicia la web y el servidor a la vez).
-          </p>
-          <button type="button" className="btn" onClick={live.refresh}>
-            Reintentar
+      <div className="subtabs" role="tablist" aria-label="Apartados de incidencias">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            id={`tab-${t.id}`}
+            aria-selected={tab === t.id}
+            aria-controls={`panel-${t.id}`}
+            className={`subtab${tab === t.id ? ' is-on' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
           </button>
+        ))}
+      </div>
+
+      {tab === 'compensaciones' && (
+        <div role="tabpanel" id="panel-compensaciones" aria-labelledby="tab-compensaciones">
+          <CompensationSection />
         </div>
       )}
 
-      {live.status === 'ready' && (
-        <>
-          <StatusSummary counts={counts} active={statuses} onToggle={toggleStatus} />
-
-          <div className="official-strip">
-            <button
-              type="button"
-              className={`official-stat${onlyLate ? ' is-on' : ''}`}
-              aria-pressed={onlyLate}
-              onClick={() => setOnlyLate((v) => !v)}
-            >
-              <strong>{lateCount}</strong> trenes con retraso oficial de {lateFrom} min o más
-              <span className="official-stat-action">{onlyLate ? 'Ver todos' : 'Ver solo estos'}</span>
-            </button>
-            <span className="official-stat is-static">
-              <strong>{live.data.counts.canceled}</strong> trenes cancelados hoy
-            </span>
-            <span className="official-stat is-static">
-              <strong>{live.data.alerts.length}</strong> avisos activos
-            </span>
-          </div>
-
-          {source && !source.ok && (
-            <p className="notice">Ahora mismo no llegan datos nuevos de la fuente. Se muestran los últimos conocidos.</p>
+      {tab === 'live' && (
+        <div role="tabpanel" id="panel-live" aria-labelledby="tab-live">
+          {live.status === 'error' && (
+            <div className="card placeholder">
+              <h2>No hay conexión con el servidor de datos</h2>
+              <p>
+                Arranca el proyecto con <code>npm run dev</code> (inicia la web y el servidor a la vez).
+              </p>
+              <button type="button" className="btn" onClick={live.refresh}>
+                Reintentar
+              </button>
+            </div>
           )}
 
-          <div className="card map-card">
-            <div className="map-toolbar live-toolbar">
-              <div className="chips" role="radiogroup" aria-label="Tipo de servicio">
-                {KINDS.map((k) => (
-                  <button
-                    key={k.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={kind === k.id}
-                    className={`chip${kind === k.id ? ' is-on' : ''}`}
-                    onClick={() => setKind(k.id)}
-                  >
-                    {k.label}
-                  </button>
-                ))}
-              </div>
-              <label className="search live-search">
-                <span className="visually-hidden">Buscar tren o estación</span>
-                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-                  <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-                <input type="search" placeholder="Nº de tren, línea o estación" value={query} onChange={(e) => setQuery(e.target.value)} />
-              </label>
-            </div>
+          {live.status === 'ready' && (
+            <>
+              <StatusSummary counts={counts} active={statuses} onToggle={toggleStatus} />
 
-            <div className="map-layout">
-              <div className="map-area">
-                {map.status === 'ready' ? (
-                  <LiveMap
-                    provinces={map.provinces}
-                    countries={map.countries}
-                    network={kind === 'cer' ? [] : map.lines}
-                    cerTracks={kind === 'ld' ? [] : cerTracks}
-                    trains={shown}
-                    selected={selectedId ? { id: selectedId, train: selectedTrain, detail: detail.data } : null}
-                    follow={follow}
-                    onSelect={select}
-                  />
-                ) : (
-                  <div className="map-status">Cargando mapa…</div>
-                )}
+              <div className="official-strip">
+                <button
+                  type="button"
+                  className={`official-stat${onlyLate ? ' is-on' : ''}`}
+                  aria-pressed={onlyLate}
+                  onClick={() => setOnlyLate((v) => !v)}
+                >
+                  <strong>{lateCount}</strong> trenes con retraso oficial de {lateFrom} min o más
+                  <span className="official-stat-action">{onlyLate ? 'Ver todos' : 'Ver solo estos'}</span>
+                </button>
+                <span className="official-stat is-static">
+                  <strong>{live.data.counts.canceled}</strong> trenes cancelados hoy
+                </span>
+                <span className="official-stat is-static">
+                  <strong>{live.data.alerts.length}</strong> avisos activos
+                </span>
               </div>
-              <aside className="panel" aria-label={selectedId ? 'Seguimiento del tren' : 'Listado de trenes'}>
-                {selectedId ? (
-                  <div className="panel-scroll">
-                    <TrainDetail
-                      train={selectedTrain}
-                      detail={detail.data}
-                      loading={detail.status === 'loading'}
-                      follow={follow}
-                      onToggleFollow={() => setFollow((f) => !f)}
-                      onClose={() => select(null)}
-                    />
+
+              {source && !source.ok && (
+                <p className="notice">Ahora mismo no llegan datos nuevos de la fuente. Se muestran los últimos conocidos.</p>
+              )}
+
+              <div className="card map-card">
+                <div className="map-toolbar live-toolbar">
+                  <div className="chips" role="radiogroup" aria-label="Tipo de servicio">
+                    {KINDS.map((k) => (
+                      <button
+                        key={k.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={kind === k.id}
+                        className={`chip${kind === k.id ? ' is-on' : ''}`}
+                        onClick={() => setKind(k.id)}
+                      >
+                        {k.label}
+                      </button>
+                    ))}
                   </div>
-                ) : (
-                  <>
-                    <h3 className="group-title live-count">
-                      Trenes <span>{shown.length}</span>
-                    </h3>
-                    <div className="panel-scroll">
-                      <TrainStatusList trains={shown} selectedId={selectedId} onSelect={select} />
-                    </div>
-                  </>
-                )}
-              </aside>
-            </div>
-          </div>
+                  <label className="search live-search">
+                    <span className="visually-hidden">Buscar tren o estación</span>
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+                      <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                      <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      type="search"
+                      placeholder="Nº de tren, línea o estación"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                  </label>
+                </div>
 
-          <AlertsPanel alerts={live.data.alerts} query={query} />
+                <div className="map-layout">
+                  <div className="map-area">
+                    {map.status === 'ready' ? (
+                      <LiveMap
+                        provinces={map.provinces}
+                        countries={map.countries}
+                        network={kind === 'cer' ? [] : map.lines}
+                        cerTracks={kind === 'ld' ? [] : cerTracks}
+                        trains={shown}
+                        selected={selectedId ? { id: selectedId, train: selectedTrain, detail: detail.data } : null}
+                        follow={follow}
+                        onSelect={select}
+                      />
+                    ) : (
+                      <div className="map-status">Cargando mapa…</div>
+                    )}
+                  </div>
+                  <aside className="panel" aria-label={selectedId ? 'Seguimiento del tren' : 'Listado de trenes'}>
+                    {selectedId ? (
+                      <div className="panel-scroll">
+                        <TrainDetail
+                          train={selectedTrain}
+                          detail={detail.data}
+                          loading={detail.status === 'loading'}
+                          follow={follow}
+                          onToggleFollow={() => setFollow((f) => !f)}
+                          onClose={() => select(null)}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <h3 className="group-title live-count">
+                          Trenes <span>{shown.length}</span>
+                        </h3>
+                        <div className="panel-scroll">
+                          <TrainStatusList trains={shown} selectedId={selectedId} onSelect={select} />
+                        </div>
+                      </>
+                    )}
+                  </aside>
+                </div>
+              </div>
 
-          {rules && (
-            <div className="card how-it-works">
-              <h2>¿Cómo detectamos un retraso?</h2>
-              <p>
-                Cada {live.data.pollSeconds} segundos recibimos la posición GPS de todos los trenes de Renfe. Con ella
-                deducimos su estado: <strong>parado</strong> si está a menos de 400 m de una estación, <strong>en camino</strong>{' '}
-                si le queda menos de 1,5 km para la siguiente y <strong>en movimiento</strong> si va entre dos estaciones.
-              </p>
-              <p>
-                Si un tren figura <strong>en movimiento</strong> pero su GPS no se ha desplazado más de {rules.stillMeters} m durante{' '}
-                {rules.delayAfterMin} minutos, lo marcamos como <strong>retraso</strong>. Es una estimación: un GPS que deja de
-                actualizarse también puede parecer un tren detenido, por eso descartamos los trenes cuya posición está
-                desactualizada. Al arrancar el servidor hacen falta unos minutos de observación.
-              </p>
-              <p>
-                Junto a esta estimación mostramos el <strong>retraso oficial</strong> que comunica Renfe para cada tren, los
-                trenes cancelados y los avisos de servicio (incidencias, obras, accesibilidad…).
-              </p>
-              <p className="summary-note">
-                Fuente: <a href="https://radardetrenes.com" target="_blank" rel="noreferrer">RadarDeTrenes</a>, que reúne los
-                datos abiertos de Renfe (posiciones, retrasos y avisos) y de ADIF.
-              </p>
-            </div>
+              <AlertsPanel alerts={live.data.alerts} query={query} />
+
+              {rules && (
+                <div className="card how-it-works">
+                  <h2>¿Cómo detectamos un retraso?</h2>
+                  <p>
+                    Cada {live.data.pollSeconds} segundos recibimos la posición GPS de todos los trenes de Renfe. Con ella
+                    deducimos su estado: <strong>parado</strong> si está a menos de 400 m de una estación,{' '}
+                    <strong>en camino</strong> si le queda menos de 1,5 km para la siguiente y <strong>en movimiento</strong> si
+                    va entre dos estaciones.
+                  </p>
+                  <p>
+                    Si un tren figura <strong>en movimiento</strong> pero su GPS no se ha desplazado más de {rules.stillMeters} m
+                    durante {rules.delayAfterMin} minutos, lo marcamos como <strong>retraso</strong>. Es una estimación: un GPS
+                    que deja de actualizarse también puede parecer un tren detenido, por eso descartamos los trenes cuya posición
+                    está desactualizada. Al arrancar el servidor hacen falta unos minutos de observación.
+                  </p>
+                  <p>
+                    Junto a esta estimación mostramos el <strong>retraso oficial</strong> que comunica Renfe para cada tren, los
+                    trenes cancelados y los avisos de servicio (incidencias, obras, accesibilidad…).
+                  </p>
+                  <p className="summary-note">
+                    Fuente:{' '}
+                    <a href="https://radardetrenes.com" target="_blank" rel="noreferrer">
+                      RadarDeTrenes
+                    </a>
+                    , que reúne los datos abiertos de Renfe (posiciones, retrasos y avisos) y de ADIF.
+                  </p>
+                </div>
+              )}
+            </>
           )}
-        </>
+        </div>
       )}
     </section>
   );

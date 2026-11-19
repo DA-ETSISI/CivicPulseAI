@@ -10,6 +10,7 @@ incidencias en tiempo real y redes de Cercanías por provincia. Se desarrolla pa
 npm install        # dependencias
 npm run data       # descarga los datos abiertos y genera public/data/*.json
 npm run dev        # arranca la web (http://localhost:5173) y el servidor de datos (puerto 3001)
+npm test           # pruebas automáticas de la lógica (src/lib/*.test.js)
 ```
 
 ## Fases del desarrollo
@@ -25,6 +26,7 @@ Cada fase explica qué se hizo, por qué y dónde está el código.
 | [Fase 5](fases/fase-05-rediseno-rutas.md) | Rediseño de Rutas: comunidades, Cercanías por provincia, tipografía y color |
 | [Fase 6](fases/fase-06-paradas-y-cabeceras.md) | Rutas: etiquetas de paradas, resaltar paradas, cabeceras de línea y corrección del acordeón |
 | [Fase 7](fases/fase-07-remates-y-servicio.md) | Rutas: remates de línea y líneas en servicio según la hora (con `?hora=` para probar) |
+| [Fase 8](fases/fase-08-compensaciones.md) | Incidencias: calculadora de compensaciones por retraso, guía para reclamar y derechos del pasajero |
 
 ## Fuentes de datos
 
