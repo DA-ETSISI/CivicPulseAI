@@ -1,69 +1,144 @@
 /**
- * Servidor de incidencias en tiempo real.
+ * Servidor de datos ferroviarios en tiempo real.
  *
  *   npm run server   (lo arranca también `npm run dev`)
  *
- * Cada 20 s descarga las posiciones GPS de los trenes que publica Renfe (GTFS-Realtime)
- * y calcula el estado de cada tren:
+ * Fuente principal: RadarDeTrenes (https://radardetrenes.com/openapi.json), una API pública y gratuita
+ * que reúne los datos abiertos de Renfe (GTFS-RT, flota, avisos) y de ADIF (tableros de estaciones).
  *
- *   STOPPED_AT     → «Parado» en una estación
- *   INCOMING_AT    → «En camino», llegando a la siguiente estación
- *   IN_TRANSIT_TO  → «En movimiento» entre estaciones
- *
- * Regla de retraso: si un tren figura «En movimiento» pero su posición GPS no ha cambiado
- * (menos de STILL_METERS) durante al menos DELAY_AFTER_MIN minutos, pasa a «Retraso».
- *
- * Además se añaden los datos oficiales de Renfe: el retraso en minutos de cada tren
- * (trip updates), los trenes cancelados y los avisos de servicio (alerts).
- *
- * Fuente: Renfe Data · GTFS-RT (https://data.renfe.com/)
+ * Qué hace:
+ *  1. Cada 20 s descarga la posición de todos los trenes de Renfe (/fleet).
+ *  2. Deduce el estado de cada tren a partir de su GPS y de las estaciones:
+ *       «Parado» (a menos de 400 m de una estación), «En camino» (a menos de 1,5 km de la siguiente)
+ *       o «En movimiento» (entre estaciones).
+ *  3. Regla de retraso: si un tren figura «En movimiento» y su GPS no se desplaza más de STILL_METERS
+ *     durante DELAY_AFTER_MIN minutos, pasa a «Retraso».
+ *  4. Aprende el trazado real de los trenes de larga distancia (/trains/{id}/route) para dibujarlo en los mapas.
+ *  5. Sirve todo a la web en /api/* con caché, para no depender de que la API externa responda siempre.
+ *  6. Clasifica cada tren (tipo de servicio, red de Cercanías y provincia) para los filtros del mapa en
+ *     directo de la portada (/api/trenes).
  */
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { geoBounds, geoContains } from 'd3-geo';
 
 const PORT = Number(process.env.PORT ?? 3001);
+const RDT = 'https://radardetrenes.com/api/v1';
+const ROOT = path.resolve(import.meta.dirname, '..');
+const ROUTES_FILE = path.join(ROOT, '.cache', 'routes.json');
+
 const POLL_MS = 20_000;
 const STILL_METERS = 40;
 const DELAY_AFTER_MIN = 3;
-/** Si una fuente lleva más de este tiempo sin actualizarse, no se marcan retrasos (no hay pruebas). */
-const STALE_FEED_MS = 3 * 60_000;
+const AT_STATION_METERS = 400;
+const INCOMING_METERS = 1500;
 /** A partir de cuántos minutos de retraso oficial se destaca un tren. */
 const OFFICIAL_DELAY_MIN = 5;
-/** Un tren que deja de aparecer en la fuente se olvida pasado este tiempo. */
+/** Si la flota lleva más de este tiempo sin actualizarse, no se marcan retrasos (no hay pruebas). */
+const STALE_FEED_MS = 3 * 60_000;
 const FORGET_MS = 10 * 60_000;
 
-const FEEDS = [
-  { kind: 'ld', label: 'Alta velocidad, larga y media distancia', url: 'https://gtfsrt.renfe.com/vehicle_positions_LD.json' },
-  { kind: 'cer', label: 'Cercanías', url: 'https://gtfsrt.renfe.com/vehicle_positions.json' },
-];
+// ---------- Llamadas a la API con caché ----------
 
-const NUCLEOS = {
-  10: 'Madrid', 20: 'Asturias', 30: 'Sevilla', 31: 'Cádiz', 32: 'Málaga', 40: 'Valencia',
-  41: 'Murcia/Alicante', 45: 'Cartagena', 46: 'Ferrol', 47: 'León', 50: 'Rodalies de Catalunya',
-  51: 'Rodalies de Catalunya', 60: 'Bilbao', 61: 'San Sebastián', 62: 'Santander', 70: 'Zaragoza',
-};
+const cache = new Map();
 
-const TRIP_FEEDS = [
-  { kind: 'ld', url: 'https://gtfsrt.renfe.com/trip_updates_LD.json' },
-  { kind: 'cer', url: 'https://gtfsrt.renfe.com/trip_updates.json' },
-];
-const ALERTS_URL = 'https://gtfsrt.renfe.com/alerts.json';
+async function fetchJson(url, timeout = 12_000) {
+  const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeout) });
+  if (!res.ok) throw new Error(`HTTP ${res.status} en ${url.replace(RDT, '')}`);
+  return res.json();
+}
 
-const STATUS_BY_RAW = { STOPPED_AT: 'stopped', INCOMING_AT: 'incoming', IN_TRANSIT_TO: 'moving' };
+/**
+ * Devuelve la respuesta en caché si tiene menos de `ttl` ms. Si hay que pedirla y la API falla,
+ * devuelve la última copia buena (aunque sea antigua) para que la web siga funcionando.
+ */
+async function cached(apiPath, ttl, { retries = 1, timeout } = {}) {
+  const hit = cache.get(apiPath);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  if (hit?.pending) return hit.pending;
 
-const reference = JSON.parse(
-  await readFile(path.join(import.meta.dirname, 'data', 'reference.json'), 'utf8').catch(() => '{"stops":{},"trains":{}}'),
-);
+  const pending = (async () => {
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const data = await fetchJson(`${RDT}${apiPath}`, timeout);
+        cache.set(apiPath, { data, at: Date.now() });
+        return data;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (hit) {
+      cache.set(apiPath, { ...hit, pending: null });
+      return hit.data;
+    }
+    cache.delete(apiPath);
+    throw lastError;
+  })();
+  cache.set(apiPath, { ...(hit ?? {}), pending });
+  return pending;
+}
 
-// ---------- Clasificación de cada tren (para los filtros del mapa) ----------
+// ---------- Utilidades ----------
 
-/** Tipo de servicio según el producto de Renfe. */
+function meters(a, b) {
+  const r = Math.PI / 180;
+  const x = (b.lon - a.lon) * r * Math.cos(((a.lat + b.lat) / 2) * r);
+  const y = (b.lat - a.lat) * r;
+  return Math.sqrt(x * x + y * y) * 6_371_000;
+}
+
+/** Simplificación Douglas–Peucker para que los trazados pesen poco. */
+function simplify(points, tol) {
+  if (points.length <= 2) return points;
+  const keep = new Uint8Array(points.length);
+  keep[0] = keep[points.length - 1] = 1;
+  const stack = [[0, points.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    const [ax, ay] = points[a];
+    const [bx, by] = points[b];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1e-12;
+    let maxD = 0, idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const [px, py] = points[i];
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+      const ex = ax + t * dx - px, ey = ay + t * dy - py;
+      const d = ex * ex + ey * ey;
+      if (d > maxD) { maxD = d; idx = i; }
+    }
+    if (maxD > tol * tol) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+const round = (n) => Math.round(n * 1e5) / 1e5;
+
+// ---------- Estaciones ----------
+
+let stations = new Map();
+async function loadStations() {
+  try {
+    const data = await cached('/stations', 24 * 3600_000, { retries: 2, timeout: 20_000 });
+    stations = new Map(
+      (data.stations ?? []).map((s) => [String(s.code).padStart(5, '0'), { name: s.name, lat: s.latitude, lon: s.longitude }]),
+    );
+  } catch {
+    /* se reintentará en el siguiente ciclo */
+  }
+}
+const stationAt = (code) => (code ? stations.get(String(code).padStart(5, '0')) : undefined);
+
+// ---------- Clasificación de cada tren (para los filtros del mapa de la portada) ----------
+
+/** Tipo de servicio según la categoría de producto que publica la fuente (y, si falta, según el nombre). */
+const SERVICE_BY_CATEGORY = { AV: 'larga', AVLO: 'larga', LD: 'larga', 'AV-MD': 'media', MD: 'media', CERC: 'corta' };
 const SERVICE_BY_TYPE = {
   AVE: 'larga', AVLO: 'larga', 'AVE Euromed': 'larga', Euromed: 'larga', Alvia: 'larga', Intercity: 'larga',
-  AVANT: 'media', 'AVANT EXP': 'media', Regional: 'media', 'Regional Exprés': 'media', 'Larga distancia': 'larga',
-  Cercanías: 'corta',
+  AVANT: 'media', Avant: 'media', 'AVANT EXP': 'media', Regional: 'media', 'Regional Exprés': 'media',
+  'Media Distancia': 'media', 'Larga distancia': 'larga', Cercanías: 'corta',
 };
 
 /** Núcleos de Cercanías agrupados como los conoce la gente (Bilbao + San Sebastián = Euskadi…). */
@@ -75,7 +150,7 @@ const NETWORK_BY_NUCLEO = {
 };
 
 /** Provincias (las mismas que dibuja el mapa) con su caja para descartar rápido. */
-const provinces = await readFile(path.join(import.meta.dirname, '..', 'public', 'data', 'provinces.json'), 'utf8')
+const provinceShapes = await readFile(path.join(ROOT, 'public', 'data', 'provinces.json'), 'utf8')
   .then((txt) =>
     JSON.parse(txt).features.map((f) => ({ code: f.properties.code, name: f.properties.name, feature: f, box: geoBounds(f) })),
   )
@@ -88,7 +163,7 @@ function validPosition({ lat, lon }) {
 
 /** Provincia en la que está un punto GPS (o null si está fuera de España, p. ej. en Francia). */
 function provinceOf({ lat, lon }) {
-  for (const p of provinces) {
+  for (const p of provinceShapes) {
     const [[x0, y0], [x1, y1]] = p.box;
     if (lon < x0 || lon > x1 || lat < y0 || lat > y1) continue;
     if (geoContains(p.feature, [lon, lat])) return { code: p.code, name: p.name };
@@ -96,218 +171,280 @@ function provinceOf({ lat, lon }) {
   return null;
 }
 
-/** Estado interno por tren: última posición y desde cuándo no se mueve. */
+// ---------- Flota y regla de retraso ----------
+
 const vehicles = new Map();
-/** Datos oficiales: retraso por viaje (tripId → segundos), viajes cancelados y avisos. */
-let officialDelays = new Map();
-let canceled = [];
-let alerts = [];
-const official = { ok: false, lastRefresh: null, error: null };
-const feedState = Object.fromEntries(
-  FEEDS.map((f) => [f.kind, { kind: f.kind, label: f.label, ok: false, lastPoll: null, lastRefresh: null, version: null, error: null }]),
-);
+const feed = { ok: false, lastPoll: null, updatedAt: null, error: null };
 
-function meters(a, b) {
-  const r = Math.PI / 180;
-  const x = (b.lon - a.lon) * r * Math.cos(((a.lat + b.lat) / 2) * r);
-  const y = (b.lat - a.lat) * r;
-  return Math.sqrt(x * x + y * y) * 6_371_000;
+/** Estado deducido del GPS: parado en estación, llegando a la siguiente o entre estaciones. */
+function deduceStatus(t, pos) {
+  const here = [t.currentStationCode, t.previousStationCode].map(stationAt).filter(Boolean);
+  if (here.some((s) => meters(s, pos) <= AT_STATION_METERS)) return 'stopped';
+  const next = stationAt(t.nextStationCode);
+  if (next && meters(next, pos) <= AT_STATION_METERS) return 'stopped';
+  if (next && meters(next, pos) <= INCOMING_METERS) return 'incoming';
+  return 'moving';
 }
 
-/** Datos legibles del tren a partir de los identificadores del tiempo real. */
-function describe(kind, v) {
-  const tripId = v.trip?.tripId ?? '';
-  const label = v.vehicle?.label ?? v.vehicle?.id ?? tripId;
-  if (kind === 'ld') {
-    const number = tripId.slice(0, 5);
-    const info = reference.trains[number];
-    const type = info?.type ?? 'Larga distancia';
-    return {
-      number,
-      label: `${info?.type ?? 'Tren'} ${number}`,
-      type,
-      service: SERVICE_BY_TYPE[type] ?? 'media',
-      network: null,
-      origin: info?.from ?? null,
-      destination: info?.to ?? null,
-    };
-  }
-  const line = label.split('-')[0];
-  const nucleo = NUCLEOS[tripId.slice(0, 2)] ?? 'Cercanías';
-  return {
-    number: v.vehicle?.id ?? '',
-    label: `${line} · ${nucleo}`,
-    type: 'Cercanías',
-    service: 'corta',
-    network: NETWORK_BY_NUCLEO[nucleo] ?? 'otros',
-    line,
-    nucleo,
-    origin: null,
-    destination: null,
-  };
-}
-
-async function pollFeed(feed) {
-  const state = feedState[feed.kind];
-  const now = Date.now();
-  state.lastPoll = new Date(now).toISOString();
-  try {
-    const res = await fetch(feed.url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const version = res.headers.get('last-modified') ?? json.header?.timestamp;
-    const fresh = version !== state.version;
-    state.ok = true;
-    state.error = null;
-    if (!fresh) return; // la fuente aún no ha publicado datos nuevos: no hay nada que comparar
-    state.version = version;
-    state.lastRefresh = new Date(now).toISOString();
-
-    for (const entity of json.entity ?? []) {
-      const v = entity.vehicle;
-      if (!v?.position) continue;
-      const key = `${feed.kind}:${entity.id}`;
-      const pos = { lat: Number(v.position.latitude), lon: Number(v.position.longitude) };
-      // Se descartan posiciones vacías o imposibles (p. ej. 0,0 cuando el GPS no tiene señal).
-      if (!validPosition(pos)) continue;
-      const raw = v.currentStatus ?? 'IN_TRANSIT_TO';
-      const prev = vehicles.get(key);
-
-      // Se cuenta desde cuándo está quieto. Si se ha movido o acaba de cambiar de estado
-      // (p. ej. sale de una estación), el contador vuelve a empezar.
-      const moved = !prev || meters(prev.pos, pos) > STILL_METERS || raw !== prev.raw;
-      const stillSince = moved ? now : prev.stillSince;
-
-      vehicles.set(key, {
-        key,
-        kind: feed.kind,
-        tripId: v.trip?.tripId ?? null,
-        pos,
-        raw,
-        stillSince,
-        // La provincia solo se recalcula si el tren se ha desplazado.
-        province: moved || prev.province === undefined ? provinceOf(pos) : prev.province,
-        lastSeen: now,
-        stopId: v.stopId ?? null,
-        info: describe(feed.kind, v),
-      });
-    }
-  } catch (err) {
-    state.ok = false;
-    state.error = err.message;
-  }
-}
-
-async function getJson(url) {
-  const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(25_000) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-/** "10T0007C3" → "C3 · Madrid"; rutas de larga distancia → "Larga distancia". */
-function routeLabel(routeId) {
-  const m = /^(\d{2})T\d{4}(.+)$/.exec(routeId);
-  if (!m) return 'Larga distancia';
-  return `${m[2]} · ${NUCLEOS[m[1]] ?? 'Cercanías'}`;
-}
-
-async function pollOfficial() {
-  try {
-    const [tripFeeds, alertFeed] = await Promise.all([Promise.all(TRIP_FEEDS.map((f) => getJson(f.url))), getJson(ALERTS_URL)]);
-
-    const delays = new Map();
-    const cancel = [];
-    tripFeeds.forEach((feed, i) => {
-      for (const e of feed.entity ?? []) {
-        const tu = e.tripUpdate;
-        const tripId = tu?.trip?.tripId;
-        if (!tripId) continue;
-        if (tu.trip.scheduleRelationship === 'CANCELED') {
-          cancel.push({ kind: TRIP_FEEDS[i].kind, tripId });
-          continue;
-        }
-        const delay = tu.delay ?? tu.stopTimeUpdate?.find((u) => u.arrival?.delay != null)?.arrival.delay;
-        if (delay != null) delays.set(tripId, Number(delay));
-      }
-    });
-
-    const nowSec = Date.now() / 1000;
-    const list = [];
-    for (const e of alertFeed.entity ?? []) {
-      const a = e.alert;
-      const period = a.activePeriod?.[0] ?? {};
-      if (period.end && Number(period.end) < nowSec) continue;
-      const raw = a.descriptionText?.translation?.find((t) => t.language === 'es')?.text ?? a.descriptionText?.translation?.[0]?.text;
-      if (!raw) continue;
-      const entities = a.informedEntity ?? [];
-      list.push({
-        id: e.id,
-        // Los avisos empiezan con etiquetas tipo "#MadC3": se quitan del texto.
-        text: raw.replace(/^(#\S+\s*)+/, '').trim(),
-        lines: [...new Set(entities.filter((x) => x.routeId).map((x) => routeLabel(x.routeId)))],
-        stops: [...new Set(entities.filter((x) => x.stopId).map((x) => reference.stops[x.stopId] ?? x.stopId))],
-        start: period.start ? new Date(Number(period.start) * 1000).toISOString() : null,
-        end: period.end ? new Date(Number(period.end) * 1000).toISOString() : null,
-      });
-    }
-    list.sort((x, y) => (y.start ?? '').localeCompare(x.start ?? ''));
-
-    officialDelays = delays;
-    canceled = cancel;
-    alerts = list;
-    official.ok = true;
-    official.error = null;
-    official.lastRefresh = new Date().toISOString();
-  } catch (err) {
-    official.ok = false;
-    official.error = err.message;
-  }
-}
-
-/** Evita que se solapen dos lecturas si las fuentes de Renfe tardan más que el intervalo. */
+/** Evita que se solapen dos lecturas si la fuente tarda más que el intervalo. */
 let polling = false;
-async function pollAll() {
+
+async function pollFleet() {
   if (polling) return;
   polling = true;
+  const now = Date.now();
+  feed.lastPoll = new Date(now).toISOString();
   try {
-    await Promise.all([...FEEDS.map(pollFeed), pollOfficial()]);
-    const now = Date.now();
-    for (const [key, v] of vehicles) if (now - v.lastSeen > FORGET_MS) vehicles.delete(key);
+    const data = await fetchJson(`${RDT}/fleet`, 15_000);
+    const fresh = data.updatedAt !== feed.updatedAt;
+    feed.ok = true;
+    feed.error = null;
+    if (!fresh) return;
+    feed.updatedAt = data.updatedAt;
+
+    for (const t of data.trains ?? []) {
+      const pos = { lat: Number(t.latitude), lon: Number(t.longitude) };
+      // Se descartan posiciones vacías o imposibles (p. ej. 0,0 cuando el GPS no tiene señal).
+      if (t.latitude == null || !validPosition(pos)) continue;
+      const status = deduceStatus(t, pos);
+      const prev = vehicles.get(t.id);
+      // Se cuenta desde cuándo está quieto; si se mueve o cambia de estado, el contador vuelve a empezar.
+      const moved = !prev || meters(prev.pos, pos) > STILL_METERS || status !== prev.baseStatus || t.speedKmh > 0;
+      vehicles.set(t.id, {
+        raw: t,
+        pos,
+        baseStatus: status,
+        stillSince: moved ? now : prev.stillSince,
+        lastSeen: now,
+        // La provincia solo se recalcula si el tren se ha desplazado.
+        province: moved || prev.province === undefined ? provinceOf(pos) : prev.province,
+      });
+      if (t.type === 'long_distance') queueRoute(t.id, t.trainCode);
+    }
+  } catch (err) {
+    feed.ok = false;
+    feed.error = err.message;
   } finally {
     polling = false;
   }
+  for (const [id, v] of vehicles) if (now - v.lastSeen > FORGET_MS) vehicles.delete(id);
 }
 
-function snapshot() {
-  const now = Date.now();
-  const trains = [];
-  for (const v of vehicles.values()) {
-    const feed = feedState[v.kind];
-    const feedFresh = feed.lastRefresh && now - Date.parse(feed.lastRefresh) < STALE_FEED_MS;
-    const stillMinutes = Math.floor((now - v.stillSince) / 60_000);
-    let status = STATUS_BY_RAW[v.raw] ?? 'moving';
-    if (status === 'moving' && feedFresh && stillMinutes >= DELAY_AFTER_MIN) status = 'delay';
+function toTrain(v, now) {
+  const t = v.raw;
+  const feedFresh = feed.updatedAt && now - Date.parse(feed.updatedAt) < STALE_FEED_MS;
+  const stillMinutes = Math.floor((now - v.stillSince) / 60_000);
+  let status = v.baseStatus;
+  if (status === 'moving' && feedFresh && !t.stale && stillMinutes >= DELAY_AFTER_MIN) status = 'delay';
 
-    const delaySec = v.tripId ? officialDelays.get(v.tripId) : undefined;
+  const isCer = t.type === 'commuter';
+  const product = t.productName ?? (isCer ? 'Cercanías' : 'Tren');
+  const nucleo = isCer ? (CLUSTERS[t.clusterCode] ?? 'Cercanías') : null;
+  const current = stationAt(t.currentStationCode);
+  return {
+    id: t.id,
+    kind: isCer ? 'cer' : 'ld',
+    service: SERVICE_BY_CATEGORY[t.productCategory] ?? SERVICE_BY_TYPE[product] ?? (isCer ? 'corta' : 'media'),
+    network: isCer ? (NETWORK_BY_NUCLEO[nucleo] ?? 'otros') : null,
+    province: v.province?.code ?? null,
+    provinceName: v.province?.name ?? null,
+    number: t.trainCode,
+    label: isCer ? `${t.line ?? 'Cercanías'} · ${nucleo}` : `${product} ${t.trainCode}`,
+    type: product,
+    color: t.productColor ?? null,
+    line: t.line ?? null,
+    nucleo,
+    origin: t.originName ?? null,
+    destination: t.destinationName ?? null,
+    lat: t.latitude,
+    lon: t.longitude,
+    status,
+    stopName: status === 'stopped' ? (current?.name ?? t.nextStationName) : t.nextStationName,
+    nextStation: t.nextStationName ?? null,
+    nextArrival: t.nextStationArrival ?? null,
+    platform: t.nextPlatform ?? t.platform ?? null,
+    speedKmh: t.speedKmh ?? null,
+    officialDelayMin: t.delayMinutes ?? null,
+    stale: Boolean(t.stale),
+    stillMinutes,
+    positionAt: t.timestamp ?? null,
+  };
+}
 
-    trains.push({
-      id: v.key,
-      kind: v.kind,
-      ...v.info,
-      lat: v.pos.lat,
-      lon: v.pos.lon,
-      province: v.province?.code ?? null,
-      provinceName: v.province?.name ?? null,
-      rawStatus: v.raw,
-      status,
-      stopId: v.stopId,
-      stopName: v.stopId ? (reference.stops[v.stopId] ?? `Estación ${v.stopId}`) : null,
-      stillMinutes,
-      officialDelayMin: delaySec == null ? null : Math.round(delaySec / 60),
-      lastSeen: new Date(v.lastSeen).toISOString(),
-    });
+const CLUSTERS = {
+  10: 'Madrid', 20: 'Asturias', 30: 'Sevilla', 31: 'Cádiz', 32: 'Málaga', 40: 'Valencia',
+  41: 'Murcia/Alicante', 45: 'Cartagena', 46: 'Ferrol', 47: 'León', 50: 'Rodalies de Catalunya',
+  51: 'Rodalies de Catalunya', 60: 'Bilbao', 61: 'San Sebastián', 62: 'Santander', 70: 'Zaragoza',
+};
+
+// ---------- Avisos (incidencias, obras, cancelaciones) ----------
+
+const KIND_LABEL = { incidencia: 'Incidencia', obras: 'Obras', cancelacion: 'Cancelación', otros: 'Aviso' };
+
+async function getAlerts() {
+  try {
+    const data = await cached('/alerts?scope=network', 60_000, { timeout: 15_000 });
+    return (data.items ?? []).map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      kindLabel: KIND_LABEL[a.kind] ?? 'Aviso',
+      text: a.text,
+      lines: [
+        ...(a.lines ?? []).map((l) => l.label),
+        ...(a.train ? [`${a.train.product} ${a.train.number}`] : []),
+      ],
+      networks: (a.networks ?? []).map((n) => n.name),
+      stops: (a.stations ?? []).map((s) => s.label),
+      start: a.activeFrom ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ---------- Trazados reales de larga distancia ----------
+
+/** trainCode → [[lon, lat], …] aprendido de /trains/{id}/route mientras el tren circula. */
+let routes = {};
+const routeQueue = [];
+const routeTried = new Map();
+
+async function loadRoutes() {
+  try {
+    routes = JSON.parse(await readFile(ROUTES_FILE, 'utf8'));
+  } catch {
+    routes = {};
+  }
+}
+
+let saveTimer;
+function saveRoutesSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    await mkdir(path.dirname(ROUTES_FILE), { recursive: true });
+    await writeFile(ROUTES_FILE, JSON.stringify(routes));
+  }, 1_000);
+}
+
+function queueRoute(id, code) {
+  if (routes[code] || routeQueue.some((q) => q.code === code)) return;
+  const tried = routeTried.get(code);
+  if (tried && Date.now() - tried < 30 * 60_000) return;
+  routeQueue.push({ id, code });
+}
+
+function toLine(geometry) {
+  const pts = (geometry ?? []).map((p) => [p.longitude, p.latitude]).filter(([x, y]) => x != null && y != null);
+  return simplify(pts, 0.0008).map(([x, y]) => [round(x), round(y)]);
+}
+
+// Se pide un trazado cada 3 s para no saturar la API externa.
+setInterval(async () => {
+  const next = routeQueue.shift();
+  if (!next) return;
+  routeTried.set(next.code, Date.now());
+  try {
+    const data = await fetchJson(`${RDT}/trains/${encodeURIComponent(next.id)}/route`, 15_000);
+    const line = toLine(data.geometry);
+    if (line.length > 1) {
+      routes[next.code] = line;
+      saveRoutesSoon();
+    }
+  } catch {
+    /* se reintentará más tarde */
+  }
+}, 3_000);
+
+// ---------- Detalle de un tren (seguimiento) ----------
+
+async function trainDetail(id) {
+  const v = vehicles.get(id);
+  const train = v ? toTrain(v, Date.now()) : null;
+  const isLd = id.startsWith('ld-');
+  const safe = (p) => p.catch(() => null);
+
+  const [route, stops, history] = await Promise.all([
+    isLd ? safe(cached(`/trains/${encodeURIComponent(id)}/route`, 10 * 60_000, { timeout: 15_000 })) : null,
+    safe(cached(`/trains/${encodeURIComponent(id)}/stops`, 60_000, { timeout: 15_000 })),
+    isLd ? safe(cached(`/trains/${encodeURIComponent(id)}/delay-history`, 60_000, { timeout: 15_000 })) : null,
+  ]);
+
+  const geometry = route?.geometry ? toLine(route.geometry) : (train && routes[train.number]) || null;
+  if (route?.geometry && train) {
+    routes[train.number] = geometry;
+    saveRoutesSoon();
   }
 
+  const stopList = (stops?.detail?.stops ?? []).map((s) => ({
+    code: s.stationCode,
+    name: s.stationName,
+    arrival: s.arrivalTime ? new Date(s.arrivalTime).toISOString() : null,
+    departure: s.departureTime ? new Date(s.departureTime).toISOString() : null,
+    lat: stationAt(s.stationCode)?.lat ?? null,
+    lon: stationAt(s.stationCode)?.lon ?? null,
+  }));
+  const routeStops = (route?.stops ?? []).map((s) => ({ code: s.stationCode, name: s.stationName, time: s.time, lat: s.latitude, lon: s.longitude }));
+
+  return {
+    train,
+    geometry,
+    stops: stopList.length ? stopList : routeStops.map((s) => ({ code: s.code, name: s.name, scheduled: s.time, lat: s.lat, lon: s.lon })),
+    delayHistory: history ?? null,
+  };
+}
+
+// ---------- Cercanías: vías con su trazado ----------
+
+async function getLines() {
+  try {
+    const data = await cached('/lines', 3600_000, { retries: 2, timeout: 20_000 });
+    return data.lines.map((l) => ({
+      id: `cer:${l.clusterCode}:${l.code}`,
+      name: `${l.code} · ${l.clusterName}`,
+      color: l.color,
+      coords: (l.geometry?.type === 'MultiLineString' ? l.geometry.coordinates : [l.geometry?.coordinates ?? []])
+        .map((part) => simplify(part, 0.0003).map(([x, y]) => [round(x), round(y)]))
+        .filter((part) => part.length > 1),
+    }));
+  } catch {
+    // Copia de reserva generada con `npm run data` a partir del GTFS de Renfe.
+    const file = JSON.parse(await readFile(path.join(ROOT, 'public', 'data', 'cercanias.json'), 'utf8'));
+    return file.lines;
+  }
+}
+
+// ---------- Trenes concretos (para Billetes) ----------
+
+async function trainsByCode(codes) {
+  const now = Date.now();
+  const live = {};
+  for (const v of vehicles.values()) if (codes.includes(v.raw.trainCode)) live[v.raw.trainCode] = toTrain(v, now);
+
+  let stats = {};
+  try {
+    const data = await cached(`/stats/trains?codes=${[...codes].sort().join(',')}`, 30 * 60_000, { retries: 1, timeout: 15_000 });
+    const entries = Array.isArray(data.trains) ? data.trains : Object.values(data.trains ?? {});
+    for (const s of entries) {
+      if (!s?.totalTrips) continue;
+      stats[s.trainCode] = {
+        window: s.window ?? data.window,
+        trips: s.totalTrips,
+        onTimePercent: s.onTimePercent ?? null,
+        avgDelay: s.avgDelay ?? null,
+        maxDelay: s.maxDelay ?? null,
+      };
+    }
+  } catch {
+    stats = {};
+  }
+  return { live, stats };
+}
+
+// ---------- Instantánea para la página de Incidencias ----------
+
+async function snapshot() {
+  const now = Date.now();
+  const trains = [...vehicles.values()].map((v) => toTrain(v, now));
   const order = { delay: 0, moving: 1, incoming: 2, stopped: 3 };
   trains.sort(
     (a, b) =>
@@ -317,7 +454,11 @@ function snapshot() {
       a.label.localeCompare(b.label),
   );
 
-  const counts = { total: trains.length, moving: 0, incoming: 0, stopped: 0, delay: 0, officialDelayed: 0, canceled: canceled.length };
+  const alerts = await getAlerts();
+  const counts = {
+    total: trains.length, moving: 0, incoming: 0, stopped: 0, delay: 0, officialDelayed: 0,
+    canceled: alerts.filter((a) => a.kind === 'cancelacion').length,
+  };
   for (const t of trains) {
     counts[t.status]++;
     if (t.officialDelayMin >= OFFICIAL_DELAY_MIN) counts.officialDelayed++;
@@ -326,25 +467,27 @@ function snapshot() {
   return {
     generatedAt: new Date(now).toISOString(),
     pollSeconds: POLL_MS / 1000,
+    source: { name: 'RadarDeTrenes (datos de Renfe y ADIF)', url: 'https://radardetrenes.com', ...feed },
     rules: { stillMeters: STILL_METERS, delayAfterMin: DELAY_AFTER_MIN, officialDelayMin: OFFICIAL_DELAY_MIN },
-    feeds: Object.values(feedState),
-    official,
-    alerts,
     counts,
+    alerts,
     trains,
   };
 }
+
+// ---------- Mapa en directo de la portada ----------
 
 /**
  * Versión ligera para el mapa en directo de la portada: solo lo necesario para dibujar
  * y filtrar cada tren, más los recuentos de cada filtro (servicio, red de Cercanías, provincia).
  */
 function liveMap() {
-  const full = snapshot();
+  const now = Date.now();
   const facets = { service: {}, network: {}, province: {} };
   const bump = (group, key) => key && (facets[group][key] = (facets[group][key] ?? 0) + 1);
 
-  const trains = full.trains.map((t) => {
+  const trains = [...vehicles.values()].map((v) => {
+    const t = toTrain(v, now);
     bump('service', t.service);
     bump('network', t.network);
     bump('province', t.province);
@@ -367,13 +510,12 @@ function liveMap() {
     };
   });
 
-  const feedsOk = full.feeds.some((f) => f.ok);
-  return { generatedAt: full.generatedAt, pollSeconds: full.pollSeconds, feedsOk, total: trains.length, facets, trains };
+  return { generatedAt: new Date(now).toISOString(), pollSeconds: POLL_MS / 1000, feedsOk: feed.ok, total: trains.length, facets, trains };
 }
 
 // ---------- HTTP ----------
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const send = (code, body) => {
     res.writeHead(code, {
@@ -384,16 +526,32 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(body));
   };
 
-  if (req.method === 'GET' && url.pathname === '/api/incidencias') return send(200, snapshot());
-  if (req.method === 'GET' && url.pathname === '/api/trenes') return send(200, liveMap());
-  if (req.method === 'GET' && url.pathname === '/api/health') return send(200, { ok: true, feeds: Object.values(feedState) });
-  send(404, { error: 'No encontrado' });
+  try {
+    if (req.method !== 'GET') return send(405, { error: 'Método no permitido' });
+    const p = url.pathname;
+    if (p === '/api/incidencias') return send(200, await snapshot());
+    if (p === '/api/trenes') return send(200, liveMap());
+    if (p === '/api/lines') return send(200, { lines: await getLines() });
+    if (p === '/api/geometry') return send(200, { routes });
+    if (p === '/api/trains') {
+      const codes = (url.searchParams.get('codes') ?? '').split(',').map((c) => c.trim()).filter(Boolean).slice(0, 40);
+      return send(200, await trainsByCode(codes));
+    }
+    const m = /^\/api\/trains\/([^/]+)$/.exec(p);
+    if (m) return send(200, await trainDetail(decodeURIComponent(m[1])));
+    if (p === '/api/health') return send(200, { ok: true, feed, trains: vehicles.size, routes: Object.keys(routes).length });
+    send(404, { error: 'No encontrado' });
+  } catch (err) {
+    send(502, { error: err.message });
+  }
 });
 
 // El servidor responde desde el primer momento (con 0 trenes) y se va llenando en cuanto llegan los datos.
 server.listen(PORT, () => {
-  console.log(`🚆 Servidor de trenes en tiempo real en http://localhost:${PORT}/api/trenes`);
+  console.log(`🚆 Datos en tiempo real en http://localhost:${PORT}/api (incidencias, trenes, líneas, trazados)`);
 });
-await pollAll();
-console.log(`   Primera lectura: ${vehicles.size} trenes`);
-setInterval(pollAll, POLL_MS);
+await Promise.all([loadRoutes(), loadStations()]);
+await pollFleet();
+console.log(`   Primera lectura: ${vehicles.size} trenes, ${stations.size} estaciones`);
+setInterval(pollFleet, POLL_MS);
+setInterval(() => stations.size || loadStations(), 60_000);

@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import LiveMap from '../components/incidents/LiveMap.jsx';
 import StatusSummary from '../components/incidents/StatusSummary.jsx';
 import TrainStatusList from '../components/incidents/TrainStatusList.jsx';
+import TrainDetail from '../components/incidents/TrainDetail.jsx';
 import AlertsPanel from '../components/incidents/AlertsPanel.jsx';
 import CompensationSection from '../components/compensation/CompensationSection.jsx';
 import { STATUSES, useLiveTrains } from '../lib/useLiveTrains.js';
-import { useNetworkData } from '../lib/useNetworkData.js';
+import { useTrainDetail } from '../lib/useTrainDetail.js';
+import { loadCercaniasTracks, useNetworkData } from '../lib/useNetworkData.js';
 import { normalize } from '../lib/text.js';
 
 const KINDS = [
@@ -33,7 +35,7 @@ function useAgo(timestamp) {
 }
 
 /**
- * Sección «Incidencias»: estado de los trenes en tiempo real y retrasos detectados,
+ * Sección «Incidencias»: trenes en tiempo real, seguimiento de un tren, retrasos y avisos,
  * y el apartado de compensaciones (calculadora, guía para reclamar y derechos del pasajero).
  */
 export default function IncidentsPage() {
@@ -45,7 +47,19 @@ export default function IncidentsPage() {
   const [query, setQuery] = useState('');
   const [onlyLate, setOnlyLate] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  const [follow, setFollow] = useState(false);
+  const [cerTracks, setCerTracks] = useState([]);
+  const detail = useTrainDetail(selectedId);
   const ago = useAgo(live.fetchedAt);
+
+  useEffect(() => {
+    loadCercaniasTracks().then(setCerTracks, () => setCerTracks([]));
+  }, []);
+
+  const select = (id) => {
+    setSelectedId(id);
+    setFollow(Boolean(id));
+  };
 
   const all = live.data?.trains ?? [];
   const byKind = useMemo(() => all.filter((t) => kind === 'all' || t.kind === kind), [all, kind]);
@@ -60,11 +74,13 @@ export default function IncidentsPage() {
     const q = normalize(query.trim());
     return byKind.filter(
       (t) =>
-        statuses.has(t.status) &&
-        (!onlyLate || t.officialDelayMin >= lateFrom) &&
-        (!q || normalize(`${t.label} ${t.number} ${t.origin ?? ''} ${t.destination ?? ''} ${t.stopName ?? ''}`).includes(q)),
+        t.id === selectedId ||
+        (statuses.has(t.status) &&
+          (!onlyLate || t.officialDelayMin >= lateFrom) &&
+          (!q || normalize(`${t.label} ${t.number} ${t.origin ?? ''} ${t.destination ?? ''} ${t.stopName ?? ''}`).includes(q))),
     );
-  }, [byKind, statuses, query, onlyLate, lateFrom]);
+  }, [byKind, statuses, query, onlyLate, lateFrom, selectedId]);
+  const selectedTrain = all.find((t) => t.id === selectedId) ?? null;
 
   const toggleStatus = (id) =>
     setStatuses((prev) => {
@@ -76,14 +92,17 @@ export default function IncidentsPage() {
     });
 
   const rules = live.data?.rules;
-  const staleFeeds = live.data?.feeds.filter((f) => !f.ok) ?? [];
+  const source = live.data?.source;
 
   return (
     <section className="page" id="incidencias">
       <div className="page-head incidents-head">
         <div>
           <h1>Incidencias en tiempo real</h1>
-          <p>Dónde está cada tren ahora mismo y cuáles podrían ir con retraso, a partir del GPS que publica Renfe.</p>
+          <p>
+            Dónde está cada tren ahora mismo, cuáles van con retraso y qué avisos hay en la red. Pulsa un tren para seguir su
+            recorrido en directo.
+          </p>
         </div>
         <div className={`live-badge${live.error ? ' is-error' : ''}`} role="status">
           <span className="live-pulse" aria-hidden="true" />
@@ -120,7 +139,7 @@ export default function IncidentsPage() {
         <div role="tabpanel" id="panel-live" aria-labelledby="tab-live">
           {live.status === 'error' && (
             <div className="card placeholder">
-              <h2>No hay conexión con el servidor de incidencias</h2>
+              <h2>No hay conexión con el servidor de datos</h2>
               <p>
                 Arranca el proyecto con <code>npm run dev</code> (inicia la web y el servidor a la vez).
               </p>
@@ -145,17 +164,15 @@ export default function IncidentsPage() {
                   <span className="official-stat-action">{onlyLate ? 'Ver todos' : 'Ver solo estos'}</span>
                 </button>
                 <span className="official-stat is-static">
-                  <strong>{live.data.counts.canceled}</strong> viajes cancelados hoy
+                  <strong>{live.data.counts.canceled}</strong> trenes cancelados hoy
                 </span>
                 <span className="official-stat is-static">
                   <strong>{live.data.alerts.length}</strong> avisos activos
                 </span>
               </div>
 
-              {staleFeeds.length > 0 && (
-                <p className="notice">
-                  Ahora mismo no llegan datos de: {staleFeeds.map((f) => f.label).join(', ')}. Se muestran los últimos conocidos.
-                </p>
+              {source && !source.ok && (
+                <p className="notice">Ahora mismo no llegan datos nuevos de la fuente. Se muestran los últimos conocidos.</p>
               )}
 
               <div className="card map-card">
@@ -195,22 +212,39 @@ export default function IncidentsPage() {
                       <LiveMap
                         provinces={map.provinces}
                         countries={map.countries}
-                        network={map.lines}
+                        network={kind === 'cer' ? [] : map.lines}
+                        cerTracks={kind === 'ld' ? [] : cerTracks}
                         trains={shown}
-                        selectedId={selectedId}
-                        onSelect={setSelectedId}
+                        selected={selectedId ? { id: selectedId, train: selectedTrain, detail: detail.data } : null}
+                        follow={follow}
+                        onSelect={select}
                       />
                     ) : (
                       <div className="map-status">Cargando mapa…</div>
                     )}
                   </div>
-                  <aside className="panel" aria-label="Listado de trenes">
-                    <h3 className="group-title live-count">
-                      Trenes <span>{shown.length}</span>
-                    </h3>
-                    <div className="panel-scroll">
-                      <TrainStatusList trains={shown} selectedId={selectedId} onSelect={setSelectedId} />
-                    </div>
+                  <aside className="panel" aria-label={selectedId ? 'Seguimiento del tren' : 'Listado de trenes'}>
+                    {selectedId ? (
+                      <div className="panel-scroll">
+                        <TrainDetail
+                          train={selectedTrain}
+                          detail={detail.data}
+                          loading={detail.status === 'loading'}
+                          follow={follow}
+                          onToggleFollow={() => setFollow((f) => !f)}
+                          onClose={() => select(null)}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <h3 className="group-title live-count">
+                          Trenes <span>{shown.length}</span>
+                        </h3>
+                        <div className="panel-scroll">
+                          <TrainStatusList trains={shown} selectedId={selectedId} onSelect={select} />
+                        </div>
+                      </>
+                    )}
                   </aside>
                 </div>
               </div>
@@ -221,23 +255,27 @@ export default function IncidentsPage() {
                 <div className="card how-it-works">
                   <h2>¿Cómo detectamos un retraso?</h2>
                   <p>
-                    Renfe publica la posición GPS de cada tren y su estado: <strong>parado</strong> en una estación,{' '}
-                    <strong>en camino</strong> a la siguiente o <strong>en movimiento</strong> entre dos estaciones. Cada{' '}
-                    {live.data.pollSeconds} segundos comparamos la posición nueva con la anterior.
+                    Cada {live.data.pollSeconds} segundos recibimos la posición GPS de todos los trenes de Renfe. Con ella
+                    deducimos su estado: <strong>parado</strong> si está a menos de 400 m de una estación,{' '}
+                    <strong>en camino</strong> si le queda menos de 1,5 km para la siguiente y <strong>en movimiento</strong> si
+                    va entre dos estaciones.
                   </p>
                   <p>
                     Si un tren figura <strong>en movimiento</strong> pero su GPS no se ha desplazado más de {rules.stillMeters} m
                     durante {rules.delayAfterMin} minutos, lo marcamos como <strong>retraso</strong>. Es una estimación: un GPS
-                    que deja de actualizarse también puede parecer un tren detenido. Al arrancar el servidor hacen falta unos
-                    minutos de observación antes de poder detectar retrasos.
+                    que deja de actualizarse también puede parecer un tren detenido, por eso descartamos los trenes cuya posición
+                    está desactualizada. Al arrancar el servidor hacen falta unos minutos de observación.
                   </p>
                   <p>
-                    Junto a esta estimación mostramos los <strong>datos oficiales de Renfe</strong>: el retraso en minutos que
-                    comunica para cada tren, los viajes cancelados y los avisos de servicio (obras, reajustes, accesibilidad…).
+                    Junto a esta estimación mostramos el <strong>retraso oficial</strong> que comunica Renfe para cada tren, los
+                    trenes cancelados y los avisos de servicio (incidencias, obras, accesibilidad…).
                   </p>
                   <p className="summary-note">
-                    Fuente: Renfe Data · GTFS Realtime (posiciones, actualizaciones de viaje y avisos de Cercanías y de alta
-                    velocidad, larga y media distancia).
+                    Fuente:{' '}
+                    <a href="https://radardetrenes.com" target="_blank" rel="noreferrer">
+                      RadarDeTrenes
+                    </a>
+                    , que reúne los datos abiertos de Renfe (posiciones, retrasos y avisos) y de ADIF.
                   </p>
                 </div>
               )}

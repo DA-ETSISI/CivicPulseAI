@@ -12,14 +12,17 @@ const COUNTRY_LABELS = [
   { name: 'Francia', at: [1.6, 43.85] },
 ];
 
-/** Proyecciones: península + países vecinos, y Canarias en un recuadro aparte. */
-export function buildGeometry(provinces, countries) {
+/**
+ * Proyecciones: península + países vecinos, y Canarias en un recuadro aparte.
+ * `fitPoints` ([lon, lat]) amplía el encuadre inicial, p. ej. para que se vean enteras las rutas a Francia.
+ */
+export function buildGeometry(provinces, countries, fitPoints = [NORTH_EAST]) {
   const mainland = provinces.features.filter((f) => !CANARY.has(f.properties.code));
   const canary = { type: 'FeatureCollection', features: provinces.features.filter((f) => CANARY.has(f.properties.code)) };
   const portugal = countries.features.filter((f) => f.properties.name === 'Portugal');
   const target = {
     type: 'FeatureCollection',
-    features: [...mainland, ...portugal, { type: 'Feature', geometry: { type: 'Point', coordinates: NORTH_EAST } }],
+    features: [...mainland, ...portugal, { type: 'Feature', geometry: { type: 'MultiPoint', coordinates: fitPoints } }],
   };
 
   const projection = geoConicConformal().parallels([37, 44]).rotate([3, 0]).fitWidth(WIDTH - 2 * PAD, target);
@@ -47,7 +50,11 @@ export function buildBase(provinces, countries, geo) {
     const [x, y] = p.centroid(f);
     return {
       name: f.properties.name,
+      code: f.properties.code,
+      ccaa: f.properties.ccaa ?? null,
+      hasNetwork: Boolean(f.properties.cercanias),
       d: p(f),
+      bounds: p.bounds(f),
       x,
       y,
       size: Math.max(7.5, Math.min(11, Math.sqrt(p.area(f)) / 9)),

@@ -10,11 +10,14 @@ function OfficialDelay({ minutes }) {
   return <span className={`official-tag${minutes >= 5 ? ' is-late' : ''}`}>Renfe: +{minutes} min</span>;
 }
 
+const hhmm = (iso) => new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+
 function where(t) {
   if (!t.stopName) return null;
   if (t.status === 'stopped') return `En ${t.stopName}`;
-  if (t.status === 'incoming') return `Llegando a ${t.stopName}`;
-  return `Hacia ${t.stopName}`;
+  const eta = t.nextArrival ? ` · llega ${hhmm(t.nextArrival)}` : '';
+  if (t.status === 'incoming') return `Llegando a ${t.stopName}${eta}`;
+  return `Hacia ${t.stopName}${eta}`;
 }
 
 /** Listado de trenes con su estado; los retrasos aparecen primero. */
