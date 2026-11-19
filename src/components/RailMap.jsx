@@ -17,7 +17,7 @@ export default function RailMap({ provinces, countries, lines, hoveredId, select
       lines.map((line) => ({
         line,
         d: geo.path({ type: 'MultiLineString', coordinates: line.coords }),
-        stops: line.coords[0].map((c) => geo.projection(c)),
+        stops: (line.stopCoords ?? line.coords[0]).map((c) => geo.projection(c)),
       })),
     [lines, geo],
   );

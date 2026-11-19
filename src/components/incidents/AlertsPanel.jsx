@@ -12,13 +12,15 @@ export default function AlertsPanel({ alerts, query }) {
 
   const shown = useMemo(() => {
     const q = normalize(query.trim());
-    return q ? alerts.filter((a) => normalize(`${a.text} ${a.lines.join(' ')} ${a.stops.join(' ')}`).includes(q)) : alerts;
+    return q
+      ? alerts.filter((a) => normalize(`${a.text} ${a.lines.join(' ')} ${a.stops.join(' ')} ${a.networks.join(' ')}`).includes(q))
+      : alerts;
   }, [alerts, query]);
 
   return (
     <div className="card alerts">
       <div className="alerts-head">
-        <h2>Avisos oficiales de Renfe</h2>
+        <h2>Avisos de la red</h2>
         <span className="chip-count">{shown.length}</span>
       </div>
       {shown.length === 0 ? (
@@ -28,6 +30,12 @@ export default function AlertsPanel({ alerts, query }) {
           {shown.slice(0, limit).map((a) => (
             <li key={a.id} className="alert">
               <div className="alert-tags">
+                <span className={`alert-kind alert-kind--${a.kind}`}>{a.kindLabel}</span>
+                {a.networks.slice(0, 2).map((n) => (
+                  <span key={n} className="alert-network">
+                    {n}
+                  </span>
+                ))}
                 {a.lines.slice(0, 6).map((l) => (
                   <span key={l} className="badge">
                     {l}

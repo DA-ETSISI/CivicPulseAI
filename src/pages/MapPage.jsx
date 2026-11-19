@@ -85,6 +85,13 @@ export default function MapPage({ theme, id = 'mapa' }) {
       </div>
 
       {data.status === 'ready' && (
+        <p className="track-note">
+          Trazado real de la vía en {lines.filter((l) => l.realTrack).length} de {lines.length} líneas. El resto se dibuja
+          uniendo sus estaciones y se completa solo a medida que circulan los trenes.
+        </p>
+      )}
+
+      {data.status === 'ready' && (
         <footer className="sources">
           Datos abiertos oficiales:{' '}
           {data.meta.sources.map((s, i) => (

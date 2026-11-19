@@ -1,9 +1,32 @@
 import { useState } from 'react';
-import { addDays, fmtDate, fmtDuration, fmtPrice, fmtTime } from '../../lib/timetable.js';
+import { addDays, fmtDate, fmtDuration, fmtPrice, fmtTime, todayIso } from '../../lib/timetable.js';
+import { useTrainInsights } from '../../lib/useTrainInsights.js';
+
+/** Estado en directo (si circula hoy) y puntualidad de los últimos 30 días. */
+function TrainInsight({ live, stats }) {
+  if (!live && !stats) return null;
+  return (
+    <span className="train-insight">
+      {live && (
+        <span className={`insight-live${live.officialDelayMin >= 5 ? ' is-late' : ''}`}>
+          <span className="live-pulse" aria-hidden="true" />
+          {live.officialDelayMin > 0 ? `Circulando · +${live.officialDelayMin} min` : 'Circulando · puntual'}
+        </span>
+      )}
+      {stats?.onTimePercent != null && (
+        <span title={`Últimos ${stats.window ?? '30d'} · ${stats.trips} viajes · retraso medio ${stats.avgDelay} min`}>
+          Puntualidad {stats.onTimePercent} %
+        </span>
+      )}
+    </span>
+  );
+}
 
 /** Listado de trenes de un día, con selector de día y tarifas desplegables. */
 export default function TrainList({ title, date, minDate, maxDate, results, selectedId, onChangeDate, onSelect }) {
   const [openId, setOpenId] = useState(null);
+  const insights = useTrainInsights(results.map((r) => r.number));
+  const isToday = date === todayIso();
 
   return (
     <div className="train-list">
@@ -51,6 +74,7 @@ export default function TrainList({ title, date, minDate, maxDate, results, sele
                     <span className={`badge badge--${r.type.split(' ')[0].toLowerCase()}`}>{r.type}</span>
                     <span>Nº {r.number}</span>
                     <span>{r.stopsBetween === 0 ? 'Directo' : `${r.stopsBetween} parada${r.stopsBetween > 1 ? 's' : ''}`}</span>
+                    <TrainInsight live={isToday ? insights.live[r.number] : null} stats={insights.stats[r.number]} />
                   </span>
                   <span className="train-price">
                     <small>desde</small>

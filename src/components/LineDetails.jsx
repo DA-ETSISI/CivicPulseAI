@@ -27,6 +27,10 @@ export default function LineDetails({ line, onClose }) {
           <dt>Paradas</dt>
           <dd>{line.stops.length}</dd>
         </div>
+        <div>
+          <dt>Trazado</dt>
+          <dd>{line.realTrack ? 'Vía real' : 'Aproximado'}</dd>
+        </div>
       </dl>
 
       <h3 className="group-title">Paradas del recorrido más completo</h3>
