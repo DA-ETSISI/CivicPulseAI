@@ -7,7 +7,7 @@ import { CATEGORIES } from '../lib/categories.js';
 import { lineColor } from '../lib/colors.js';
 
 /** Sección «Mapa»: red de alta velocidad con filtros por tipo de tren y listado de líneas. */
-export default function MapPage({ theme }) {
+export default function MapPage({ theme, id = 'mapa' }) {
   const data = useNetworkData();
   const [visible, setVisible] = useState(() => new Set(CATEGORIES.map((c) => c.id)));
   const [hoveredId, setHoveredId] = useState(null);
@@ -39,7 +39,7 @@ export default function MapPage({ theme }) {
   const select = useCallback((id) => setSelectedId((cur) => (id && cur === id ? null : id)), []);
 
   return (
-    <section className="page" id="mapa">
+    <section className="page" id={id}>
       <div className="page-head">
         <h1>La alta velocidad en España, de un vistazo</h1>
         <p>
