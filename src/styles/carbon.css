@@ -1,0 +1,33 @@
+/* ---------- CO2 ahorrado frente al coche (resumen de compra) ---------- */
+.carbon {
+  margin-top: 6px; padding: 10px 12px; border-radius: 10px; display: grid; gap: 8px;
+  background: color-mix(in srgb, var(--st-moving) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--st-moving) 30%, var(--border));
+}
+.carbon-main { display: flex; align-items: flex-start; gap: 8px; font-size: 0.88rem; line-height: 1.35; }
+.carbon-main strong { color: var(--st-moving); }
+.carbon-leaf { flex: none; color: var(--st-moving); margin-top: 1px; }
+
+.carbon-bars { display: grid; gap: 4px; }
+.carbon-bar { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 8px; font-size: 0.72rem; color: var(--muted); }
+.carbon-bar-track { height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 8%, transparent); overflow: hidden; }
+.carbon-bar-fill { display: block; height: 100%; border-radius: inherit; transition: width 0.4s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.carbon-bar.is-car .carbon-bar-fill { background: var(--st-delay); }
+.carbon-bar.is-train .carbon-bar-fill { background: var(--st-moving); }
+.carbon-bar-kg { font-variant-numeric: tabular-nums; color: var(--ink-2); min-width: 52px; text-align: right; }
+.carbon-meta { font-size: 0.72rem; color: var(--muted); }
+
+.carbon-fuel { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); }
+.carbon-fuel button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); cursor: pointer;
+  padding: 3px 10px; border-radius: 999px; font: inherit; font-size: 0.75rem; font-weight: 600;
+}
+.carbon-fuel button.is-on { border-color: var(--st-moving); color: var(--ink); background: color-mix(in srgb, var(--st-moving) 12%, var(--surface)); }
+.carbon-fuel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.carbon-total { font-size: 0.85rem; color: var(--ink-2); }
+.carbon-total strong { color: var(--st-moving); }
+
+@media (prefers-reduced-motion: reduce) {
+  .carbon-bar-fill { transition: none; }
+}

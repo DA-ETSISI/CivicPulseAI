@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "data": "node scripts/build-data.mjs",
-    "test": "node --test src/lib/"
+    "test": "node --test src/lib/",
+    "share": "vite build && vite preview"
   },
   "dependencies": {
     "d3-geo": "^3.1.1",
