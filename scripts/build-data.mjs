@@ -1,26 +1,37 @@
 /**
  * Descarga los datos abiertos oficiales y genera los JSON ligeros que usa la web.
  *
- *   npm run data
+ *   npm run data            (usa la caché de .cache/ si existe)
+ *   npm run data -- --fresh (fuerza una descarga nueva)
  *
  * Fuentes:
  *  - Renfe Data (GTFS Alta Velocidad, Larga y Media Distancia): https://data.renfe.com/dataset/horarios-de-alta-velocidad-larga-distancia-y-media-distancia
- *  - Renfe Data (GTFS Cercanías y Rodalies):                     https://data.renfe.com/dataset/horarios-cercanias
  *  - Límites provinciales (derivados de IGN/CNIG):               https://github.com/codeforgermany/click_that_hood
+ *  - Países vecinos (Natural Earth, vía world-atlas):            https://github.com/topojson/world-atlas
  *
- * Salida: public/data/provinces.json y public/data/network.json
+ * Salida en public/data/:
+ *  - network.json    líneas de alta velocidad para el mapa
+ *  - timetable.json  horarios de todos los trenes AV/LD/MD para el buscador de billetes
+ *  - provinces.json  provincias de España
+ *  - countries.json  Portugal, Francia y Andorra
  */
 import { unzipSync, strFromU8 } from 'fflate';
+import { feature } from 'topojson-client';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 const SOURCES = {
   ld: 'https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip',
-  cer: 'https://ssl.renfe.com/ftransit/Fichero_CER_FOMENTO/fomento_transit.zip',
   provinces:
     'https://raw.githubusercontent.com/codeforgermany/click_that_hood/main/public/data/spain-provinces.geojson',
+  world: 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json',
 };
+
+/** Tipos de tren que se dibujan en el mapa (alta velocidad de larga distancia). */
+const MAP_TYPES = new Set(['AVE', 'AVLO', 'AVE Euromed']);
+/** Días de calendario que se incluyen en el buscador de billetes. */
+const DAYS = 90;
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CACHE = path.join(ROOT, '.cache');
@@ -110,50 +121,55 @@ const groupBy = (arr, key) => {
   return m;
 };
 
-// ---------- Alta Velocidad, Larga y Media Distancia ----------
+/** "25:07:00" → 1507 minutos desde la medianoche del día de salida */
+const toMinutes = (hms) => {
+  const [h, m] = hms.split(':').map(Number);
+  return h * 60 + m;
+};
 
-const AV_TYPES = new Set(['AVE', 'AVANT', 'AVLO', 'AVE Euromed', 'AVANT EXP', 'Alvia', 'Euromed']);
-const categoryOf = (type) => (AV_TYPES.has(type) ? 'av' : type === 'Regional' || type === 'MD' ? 'md' : 'ld');
+const ymd = (d) => d.toISOString().slice(0, 10).replaceAll('-', '');
+const parseYmd = (s) => new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)));
 
-function buildLongDistance(gtfs) {
+// ---------- GTFS común ----------
+
+function indexGtfs(gtfs) {
   const stops = new Map(gtfs['stops.txt'].map((s) => [s.stop_id, s]));
   const routes = new Map(gtfs['routes.txt'].map((r) => [r.route_id, r]));
-  const tripsByRoute = groupBy(gtfs['trips.txt'], (t) => t.route_id);
-  const timesByTrip = groupBy(gtfs['stop_times.txt'], (st) => st.trip_id);
+  const timesByTrip = new Map();
+  for (const [id, seq] of groupBy(gtfs['stop_times.txt'], (st) => st.trip_id)) {
+    timesByTrip.set(
+      id,
+      seq.filter((s) => stops.has(s.stop_id)).sort((a, b) => Number(a.stop_sequence) - Number(b.stop_sequence)),
+    );
+  }
+  return { stops, routes, timesByTrip, trips: gtfs['trips.txt'] };
+}
 
+// ---------- Líneas de alta velocidad (mapa) ----------
+
+function buildHighSpeedLines({ stops, routes, timesByTrip, trips }) {
   const lines = new Map();
-  for (const [routeId, trips] of tripsByRoute) {
-    const route = routes.get(routeId);
-    if (!route) continue;
-    const type = route.route_short_name || 'Tren';
-    const category = categoryOf(type);
+  for (const [routeId, routeTrips] of groupBy(trips, (t) => t.route_id)) {
+    const type = routes.get(routeId)?.route_short_name;
+    if (!MAP_TYPES.has(type)) continue;
 
     // Trayecto representativo: el viaje con más paradas.
     let best = [];
-    for (const t of trips) {
+    for (const t of routeTrips) {
       const seq = timesByTrip.get(t.trip_id) ?? [];
       if (seq.length > best.length) best = seq;
     }
-    best = [...best].sort((a, b) => Number(a.stop_sequence) - Number(b.stop_sequence));
-    const stopIds = best.map((s) => s.stop_id).filter((id) => stops.has(id));
+    const stopIds = best.map((s) => s.stop_id);
     if (stopIds.length < 2) continue;
 
-    const a = stopIds[0], b = stopIds.at(-1);
-    const [ca, cb] = [cityOf(stops.get(a).stop_name), cityOf(stops.get(b).stop_name)];
-    if (ca === cb) continue; // circulares/internos sin interés en el mapa nacional
+    const [ca, cb] = [cityOf(stops.get(stopIds[0]).stop_name), cityOf(stops.get(stopIds.at(-1)).stop_name)];
+    if (ca === cb) continue;
     const pair = [ca, cb].sort((x, y) => x.localeCompare(y, 'es'));
-    const key = `${category}:${pair.join('|')}`;
+    const key = `av:${pair.join('|')}`;
 
-    const line = lines.get(key) ?? {
-      id: key,
-      category,
-      name: `${pair[0]} – ${pair[1]}`,
-      types: new Set(),
-      trips: 0,
-      stopIds: [],
-    };
+    const line = lines.get(key) ?? { id: key, category: 'av', name: `${pair[0]} – ${pair[1]}`, types: new Set(), trips: 0, stopIds: [] };
     line.types.add(type);
-    line.trips += trips.length;
+    line.trips += routeTrips.length;
     if (stopIds.length > line.stopIds.length) line.stopIds = stopIds;
     lines.set(key, line);
   }
@@ -169,92 +185,130 @@ function buildLongDistance(gtfs) {
   }));
 }
 
-// ---------- Cercanías y Rodalies ----------
+// ---------- Horarios (buscador de billetes) ----------
 
-const NUCLEOS = {
-  10: 'Madrid', 20: 'Asturias', 30: 'Sevilla', 31: 'Cádiz', 32: 'Málaga', 40: 'Valencia',
-  41: 'Murcia/Alicante', 45: 'Cartagena', 46: 'Ferrol', 47: 'León', 50: 'Rodalies de Catalunya',
-  51: 'Rodalies de Catalunya', 60: 'Bilbao', 61: 'San Sebastián', 62: 'Santander', 70: 'Zaragoza',
-};
+function buildTimetable({ stops, routes, timesByTrip, trips }, gtfs) {
+  const base = parseYmd(ymd(new Date()));
+  const dayIndex = (s) => Math.round((parseYmd(s) - base) / 86400000);
 
-function buildCercanias(gtfs) {
-  const shapes = new Map();
-  for (const [id, pts] of groupBy(gtfs['shapes.txt'], (p) => p.shape_id)) {
-    const coords = pts
-      .sort((a, b) => Number(a.shape_pt_sequence) - Number(b.shape_pt_sequence))
-      .map((p) => [+p.shape_pt_lon, +p.shape_pt_lat]);
-    shapes.set(id, simplify(coords, 0.0004).map(([x, y]) => [round(x), round(y)]));
-  }
-  const shapesByRoute = new Map();
-  for (const t of gtfs['trips.txt']) {
-    if (!t.shape_id) continue;
-    if (!shapesByRoute.has(t.route_id)) shapesByRoute.set(t.route_id, new Map());
-    const m = shapesByRoute.get(t.route_id);
-    m.set(t.shape_id, (m.get(t.shape_id) ?? 0) + 1);
-  }
-
-  const lines = new Map();
-  for (const r of gtfs['routes.txt']) {
-    const short = r.route_short_name;
-    if (!short || short === 'BUS') continue;
-    const nucleoId = r.route_id.slice(0, 2);
-    const nucleo = NUCLEOS[nucleoId] ?? `Núcleo ${nucleoId}`;
-    const key = `cer:${nucleoId}:${short}`;
-    const line = lines.get(key) ?? {
-      id: key,
-      category: 'cer',
-      name: `${short} · ${nucleo}`,
-      nucleo,
-      types: [short],
-      trips: 0,
-      stops: [],
-      shapeIds: new Set(),
-    };
-    // route_long_name viene en ancho fijo: "Origen<relleno hasta 40>-Destino"
-    const raw = r.route_long_name;
-    const ends = (raw[40] === '-' ? [raw.slice(0, 40), raw.slice(41)] : raw.split(/\s+-/))
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!line.stops.length && ends.length) line.stops = ends;
-    for (const [sid, n] of shapesByRoute.get(r.route_id) ?? []) {
-      line.shapeIds.add(sid);
-      line.trips += n;
+  // Días de circulación de cada servicio, dentro de la ventana [hoy, hoy + DAYS)
+  const removed = groupBy(gtfs['calendar_dates.txt'].filter((c) => c.exception_type === '2'), (c) => c.service_id);
+  const added = groupBy(gtfs['calendar_dates.txt'].filter((c) => c.exception_type === '1'), (c) => c.service_id);
+  const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const serviceDays = new Map();
+  for (const c of gtfs['calendar.txt']) {
+    const days = new Set();
+    const from = Math.max(0, dayIndex(c.start_date));
+    const to = Math.min(DAYS - 1, dayIndex(c.end_date));
+    for (let i = from; i <= to; i++) {
+      const date = new Date(base.getTime() + i * 86400000);
+      if (c[WEEKDAYS[date.getUTCDay()]] === '1') days.add(i);
     }
-    lines.set(key, line);
+    for (const r of removed.get(c.service_id) ?? []) days.delete(dayIndex(r.date));
+    for (const a of added.get(c.service_id) ?? []) {
+      const i = dayIndex(a.date);
+      if (i >= 0 && i < DAYS) days.add(i);
+    }
+    serviceDays.set(c.service_id, days);
   }
 
-  return [...lines.values()]
-    .map(({ shapeIds, ...l }) => ({
-      ...l,
-      coords: [...shapeIds].map((s) => shapes.get(s)).filter((c) => c && c.length > 1),
-    }))
-    .filter((l) => l.coords.length);
+  const stationIndex = new Map();
+  const stations = [];
+  const stationOf = (id) => {
+    if (!stationIndex.has(id)) {
+      const s = stops.get(id);
+      stationIndex.set(id, stations.length);
+      stations.push({ id, name: s.stop_name, city: cityOf(s.stop_name), lat: round(+s.stop_lat), lon: round(+s.stop_lon) });
+    }
+    return stationIndex.get(id);
+  };
+
+  const types = [];
+  const typeOf = (t) => (types.includes(t) ? types.indexOf(t) : types.push(t) - 1);
+
+  // Un mismo tren aparece en varios "trips" (uno por periodo de calendario): se fusionan.
+  const trains = new Map();
+  for (const t of trips) {
+    const days = serviceDays.get(t.service_id);
+    const seq = timesByTrip.get(t.trip_id);
+    if (!days?.size || !seq || seq.length < 2) continue;
+    const type = routes.get(t.route_id)?.route_short_name ?? 'Tren';
+    const s = seq.map((st) => [stationOf(st.stop_id), toMinutes(st.arrival_time), toMinutes(st.departure_time)]);
+    const key = `${t.trip_short_name}|${JSON.stringify(s)}`;
+    const train = trains.get(key) ?? { n: t.trip_short_name, t: typeOf(type), s, days: new Set() };
+    for (const d of days) train.days.add(d);
+    trains.set(key, train);
+  }
+
+  // Días codificados como bits en hexadecimal: el carácter i guarda los días 4i..4i+3.
+  const encode = (days) => {
+    let hex = '';
+    for (let i = 0; i < DAYS; i += 4) {
+      let v = 0;
+      for (let b = 0; b < 4; b++) if (days.has(i + b)) v |= 1 << b;
+      hex += v.toString(16);
+    }
+    return hex;
+  };
+
+  return {
+    base: base.toISOString().slice(0, 10),
+    days: DAYS,
+    types,
+    stations,
+    trains: [...trains.values()]
+      .sort((a, b) => a.s[0][2] - b.s[0][2])
+      .map(({ days, ...train }) => ({ ...train, d: encode(days) })),
+  };
 }
 
-// ---------- Provincias ----------
+// ---------- Mapa base ----------
+
+function cleanRing(ring, tol, digits) {
+  const s = simplify(ring, tol).map(([x, y]) => [round(x, digits), round(y, digits)]);
+  return s.length >= 4 ? s : null;
+}
+
+function toMultiPolygon(geometry, tol, keepPolygon = () => true) {
+  const polys = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  return {
+    type: 'MultiPolygon',
+    coordinates: polys
+      .filter(keepPolygon)
+      .map((p) => p.map((r) => cleanRing(r, tol, 3)).filter(Boolean))
+      .filter((p) => p.length),
+  };
+}
 
 function buildProvinces(geo) {
-  const clean = (name) =>
-    name
-      .split('/')
-      .pop()
-      .replace(' De ', ' de ')
-      .trim();
-  const ring = (r) => {
-    const s = simplify(r, 0.012).map(([x, y]) => [round(x, 3), round(y, 3)]);
-    return s.length >= 4 ? s : null;
-  };
+  const clean = (name) => name.split('/').pop().replace(' De ', ' de ').trim();
   return {
     type: 'FeatureCollection',
-    features: geo.features.map((f) => {
-      const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
-      const coordinates = polys.map((p) => p.map(ring).filter(Boolean)).filter((p) => p.length);
-      return {
+    features: geo.features.map((f) => ({
+      type: 'Feature',
+      properties: { name: clean(f.properties.name), code: f.properties.cod_prov },
+      geometry: toMultiPolygon(f.geometry, 0.012),
+    })),
+  };
+}
+
+/** Portugal, Francia y Andorra (solo su parte europea continental + Córcega). */
+function buildCountries(topo) {
+  const WANTED = { 620: 'Portugal', 250: 'Francia', 20: 'Andorra' };
+  const inEurope = (poly) => {
+    const [lon, lat] = poly[0][0];
+    return lon > -10 && lon < 10 && lat > 36 && lat < 52;
+  };
+  const world = feature(topo, topo.objects.countries);
+  return {
+    type: 'FeatureCollection',
+    features: world.features
+      .filter((f) => WANTED[Number(f.id)])
+      .map((f) => ({
         type: 'Feature',
-        properties: { name: clean(f.properties.name), code: f.properties.cod_prov },
-        geometry: { type: 'MultiPolygon', coordinates },
-      };
-    }),
+        properties: { name: WANTED[Number(f.id)] },
+        geometry: toMultiPolygon(f.geometry, 0.01, inEurope),
+      })),
   };
 }
 
@@ -263,29 +317,31 @@ function buildProvinces(geo) {
 await mkdir(CACHE, { recursive: true });
 await mkdir(OUT, { recursive: true });
 
-const [ldZip, cerZip, provBuf] = await Promise.all([
+const [ldZip, provBuf, worldBuf] = await Promise.all([
   download(SOURCES.ld, 'renfe-ld.zip'),
-  download(SOURCES.cer, 'renfe-cercanias.zip'),
   download(SOURCES.provinces, 'provinces.geojson'),
+  download(SOURCES.world, 'countries-50m.json'),
 ]);
 
-const ld = buildLongDistance(unzip(ldZip, ['stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt']));
-const cer = buildCercanias(unzip(cerZip, ['routes.txt', 'trips.txt', 'shapes.txt']));
-const provinces = buildProvinces(JSON.parse(provBuf.toString('utf8')));
+const gtfs = unzip(ldZip, ['stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt', 'calendar.txt', 'calendar_dates.txt']);
+const indexed = indexGtfs(gtfs);
 
-const network = {
-  generatedAt: new Date().toISOString(),
-  sources: [
-    { name: 'Renfe Data · GTFS Alta Velocidad, Larga y Media Distancia', url: 'https://data.renfe.com/dataset/horarios-de-alta-velocidad-larga-distancia-y-media-distancia' },
-    { name: 'Renfe Data · GTFS Cercanías y Rodalies', url: 'https://data.renfe.com/dataset/horarios-cercanias' },
-  ],
-  lines: [...ld, ...cer],
-};
+const sources = [
+  {
+    name: 'Renfe Data · GTFS Alta Velocidad, Larga y Media Distancia',
+    url: 'https://data.renfe.com/dataset/horarios-de-alta-velocidad-larga-distancia-y-media-distancia',
+  },
+];
+const network = { generatedAt: new Date().toISOString(), sources, lines: buildHighSpeedLines(indexed) };
+const timetable = { generatedAt: network.generatedAt, sources, ...buildTimetable(indexed, gtfs) };
+const provinces = buildProvinces(JSON.parse(provBuf.toString('utf8')));
+const countries = buildCountries(JSON.parse(worldBuf.toString('utf8')));
 
 await writeFile(path.join(OUT, 'network.json'), JSON.stringify(network));
+await writeFile(path.join(OUT, 'timetable.json'), JSON.stringify(timetable));
 await writeFile(path.join(OUT, 'provinces.json'), JSON.stringify(provinces));
+await writeFile(path.join(OUT, 'countries.json'), JSON.stringify(countries));
 
-const count = (c) => network.lines.filter((l) => l.category === c).length;
 console.log(
-  `✔ ${network.lines.length} líneas (AV ${count('av')}, LD ${count('ld')}, MD ${count('md')}, Cercanías ${count('cer')}) · ${provinces.features.length} provincias`,
+  `✔ Mapa: ${network.lines.length} líneas AV · Billetes: ${timetable.trains.length} trenes, ${timetable.stations.length} estaciones, ${DAYS} días desde ${timetable.base} · ${provinces.features.length} provincias · ${countries.features.length} países`,
 );
