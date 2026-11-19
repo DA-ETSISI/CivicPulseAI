@@ -14,11 +14,11 @@ export function loadCercanias() {
 
 /** Líneas de Cercanías que tienen alguna estación en la provincia `code`. */
 export function useProvinceCercanias(code) {
-  const [state, setState] = useState({ status: 'idle', lines: [], source: null });
+  const [state, setState] = useState({ status: 'idle', lines: [], source: null, base: null, covered: 0 });
 
   useEffect(() => {
     if (!code) {
-      setState({ status: 'idle', lines: [], source: null });
+      setState({ status: 'idle', lines: [], source: null, base: null, covered: 0 });
       return undefined;
     }
     let cancelled = false;
@@ -26,9 +26,15 @@ export function useProvinceCercanias(code) {
     loadCercanias()
       .then((data) => {
         if (cancelled) return;
-        setState({ status: 'ready', lines: data.lines.filter((l) => l.provinces.includes(code)), source: data.source });
+        setState({
+          status: 'ready',
+          lines: data.lines.filter((l) => l.provinces.includes(code)),
+          source: data.source,
+          base: data.serviceBase,
+          covered: data.serviceDays,
+        });
       })
-      .catch(() => !cancelled && setState({ status: 'error', lines: [], source: null }));
+      .catch(() => !cancelled && setState({ status: 'error', lines: [], source: null, base: null, covered: 0 }));
     return () => {
       cancelled = true;
     };

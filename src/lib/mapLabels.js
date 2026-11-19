@@ -1,7 +1,7 @@
 /**
  * Utilidades de cartografía para el mapa de Rutas:
  * - colocar las etiquetas de las paradas sin que se solapen;
- * - agrupar las cabeceras (inicio y final) de las líneas que comparten estación.
+ * - localizar las ciudades cabecera con muchas líneas (para rotular solo las principales).
  *
  * Todo se calcula en píxeles de pantalla y se convierte a unidades del mapa dividiendo por el zoom `k`,
  * para que las etiquetas tengan siempre el mismo tamaño en pantalla.
@@ -117,11 +117,4 @@ export function groupTerminals(shapes, k, thresholdPx = 11) {
     g.city = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
   }
   return groups.sort((a, b) => a.lineIds.length - b.lineIds.length);
-}
-
-/** Trazado SVG de un sector de corona entre los ángulos a0 y a1 (radianes), centrado en 0,0. */
-export function ringSegment(r0, r1, a0, a1) {
-  const large = a1 - a0 > Math.PI ? 1 : 0;
-  const p = (r, a) => `${(r * Math.cos(a)).toFixed(3)},${(r * Math.sin(a)).toFixed(3)}`;
-  return `M${p(r1, a0)}A${r1},${r1} 0 ${large} 1 ${p(r1, a1)}L${p(r0, a1)}A${r0},${r0} 0 ${large} 0 ${p(r0, a0)}Z`;
 }

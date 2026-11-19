@@ -7,6 +7,7 @@ import { useNetworkData } from '../lib/useNetworkData.js';
 import { loadCercanias, useProvinceCercanias } from '../lib/useCercanias.js';
 import { CATEGORIES } from '../lib/categories.js';
 import { lineColor } from '../lib/colors.js';
+import { hhmm, lineStatus, useServiceClock } from '../lib/serviceStatus.js';
 
 /**
  * Rutas: mapa de la red de alta velocidad (con filtros por servicio y listado por comunidades)
@@ -20,12 +21,25 @@ export default function MapPage({ theme, id = 'mapa' }) {
   const [highlightedStop, setHighlightedStop] = useState(null);
   const [provinceCode, setProvinceCode] = useState(null);
   const [hoveredCerId, setHoveredCerId] = useState(null);
-  const cercanias = useProvinceCercanias(provinceCode);
+  const cercaniasData = useProvinceCercanias(provinceCode);
+  const clock = useServiceClock();
 
-  // Cada línea tiene su color; en modo oscuro se aclara.
+  // Cada línea tiene su color (en modo oscuro se aclara) y su estado de servicio a la hora actual en Madrid.
   const lines = useMemo(
-    () => (data.lines ?? []).map((line, i) => ({ ...line, color: lineColor(i, theme) })),
-    [data.lines, theme],
+    () =>
+      (data.lines ?? []).map((line, i) => ({
+        ...line,
+        color: lineColor(i, theme),
+        status: lineStatus(line.service, data.meta?.serviceBase, data.meta?.serviceDays, clock),
+      })),
+    [data.lines, data.meta, theme, clock],
+  );
+  const cercanias = useMemo(
+    () => ({
+      ...cercaniasData,
+      lines: cercaniasData.lines.map((l) => ({ ...l, status: lineStatus(l.service, cercaniasData.base, cercaniasData.covered, clock) })),
+    }),
+    [cercaniasData, clock],
   );
   const shown = useMemo(() => lines.filter((l) => l.types.some((t) => visible.has(t))), [lines, visible]);
   const counts = useMemo(() => {
@@ -108,6 +122,12 @@ export default function MapPage({ theme, id = 'mapa' }) {
       <div className="routes-layout">
         <div className="card map-card">
           <div className="map-toolbar">
+            {clock.simulated && (
+              <p className="sim-clock" role="status">
+                Hora simulada: <strong className="num">{hhmm(clock.minutes)}</strong>
+                {new URLSearchParams(window.location.search).get('fecha') ? ` · ${clock.date}` : ''}
+              </p>
+            )}
             {provinceCode ? (
               <nav className="crumbs" aria-label="Estás en">
                 <button type="button" className="crumb" onClick={leaveProvince}>

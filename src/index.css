@@ -721,9 +721,13 @@ button.official-stat:hover { border-color: var(--border-strong); }
 .details-regions { margin: -4px 0 16px; font-size: var(--text-sm); color: var(--ink-2); }
 
 /* Estados de las líneas: previsualizar (hover) y fijar (clic). Cambios instantáneos, sin transición. */
-.map-svg.has-preview .lines .line:not(.is-active) { opacity: 0.4; }
-.map-svg.has-selection .lines .line:not(.is-active) { opacity: 0.14; }
-.lines .line.is-active { stroke-width: 4.4px; }
+.map-svg.has-preview .lines .line-group:not(.is-active) { opacity: 0.4; }
+.map-svg.has-selection .lines .line-group:not(.is-active) { opacity: 0.14; }
+.lines .line-group.is-active .line { stroke-width: 4.4px; }
+
+/* Líneas sin servicio a esta hora: atenuadas (el texto del tooltip y del panel lo explica) */
+.lines .line-status.is-inactive { opacity: 0.3; }
+.line-cap { stroke: none; }
 .stop-layer--preview .active-casing { stroke-width: 7px; }
 .stop-layer--preview .active-stroke { stroke-width: 4.4px; }
 .map-svg.has-preview .terminals, .map-svg.has-selection .terminals { opacity: 0.28; }
@@ -778,8 +782,7 @@ button.official-stat:hover { border-color: var(--border-strong); }
   transition: fill 0.2s ease, opacity 0.3s ease;
 }
 .provinces.is-interactive .province.has-network { cursor: pointer; }
-.provinces.is-interactive .province:hover { fill: var(--land-hover); }
-.provinces.is-interactive .province:not(.has-network):hover { fill: color-mix(in oklch, var(--land-hover) 45%, var(--land)); }
+.provinces.is-interactive .province.has-network:hover { fill: var(--land-hover); }
 .provinces.has-active .province:not(.is-active) { fill: var(--land-dim); }
 .provinces.has-active .province.is-active { fill: var(--land-active); stroke: var(--accent); stroke-width: 1.4; }
 
@@ -795,9 +798,12 @@ button.official-stat:hover { border-color: var(--border-strong); }
 .cer-line { transition: opacity 0.2s ease; }
 .cer-network.has-hover .cer-line:not(.is-hover) { opacity: 0.22; }
 .cer-stations circle { fill: var(--casing); opacity: 0; animation: fade-in 0.4s ease var(--delay) forwards; transition: opacity 0.2s; }
+.cer-stations circle.cer-cap { stroke: none; }
+.cer-stations circle.is-inactive { --fade-to: 0.3; }
 .cer-stations circle.is-dim { opacity: 0.2 !important; animation: none; }
+.cer-line.is-inactive { opacity: 0.3; }
 @keyframes cer-draw { to { stroke-dashoffset: 0; } }
-@keyframes fade-in { to { opacity: 1; } }
+@keyframes fade-in { to { opacity: var(--fade-to, 1); } }
 
 /* Migas de pan */
 .crumbs { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: var(--text-md); color: var(--muted); }
@@ -820,6 +826,31 @@ button.official-stat:hover { border-color: var(--border-strong); }
   background: var(--line); color: oklch(0.99 0 0); text-shadow: 0 1px 1px oklch(0 0 0 / 0.35);
 }
 .panel-source { font-size: var(--text-xs); color: var(--muted); }
+
+/* En servicio / sin servicio en las listas */
+.service-divider {
+  margin: 10px 10px 4px 34px; padding-top: 10px; border-top: 1px dashed var(--border-strong);
+  font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.cer-lines .service-divider { margin-left: 8px; }
+.route-item.is-inactive .route-name, .cer-item.is-inactive .route-name { color: var(--muted); }
+.route-item.is-inactive .route-dot { opacity: 0.35; }
+.route-status { color: var(--muted); }
+.cer-item.is-inactive .cer-badge {
+  background: color-mix(in oklch, var(--line) 30%, var(--surface)); color: var(--ink); text-shadow: none;
+}
+.service-notice {
+  padding: 10px 12px; border-radius: 10px; font-size: var(--text-sm); line-height: 1.45;
+  color: var(--ink); background: var(--surface-2); border: 1px solid var(--border-strong);
+}
+.tooltip-status { margin-top: 4px; font-size: var(--text-xs); font-weight: 600; }
+.tooltip-status.is-active { color: var(--accent); }
+.tooltip-status.is-inactive { color: var(--muted); }
+.sim-clock {
+  display: inline-flex; gap: 6px; align-items: center; margin: 0 12px 0 0; padding: 4px 10px; border-radius: 999px;
+  font-size: var(--text-xs); color: var(--ink-2); background: var(--surface-2); border: 1px dashed var(--border-strong);
+}
+.routes-page .map-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 /* Loader temático y avisos sobre el mapa */
 .cer-loader, .map-toast {
@@ -870,6 +901,8 @@ button.official-stat:hover { border-color: var(--border-strong); }
   .main { padding: 20px 16px 48px; }
   .map-toolbar { padding: 12px; }
   .lines .line { stroke-width: 2.6px; }
+  .lines .line-group.is-active .line, .stop-layer--preview .active-stroke { stroke-width: 3.4px; }
+  .stop-layer--preview .active-casing { stroke-width: 6px; }
   .active-casing { stroke-width: 8px; }
   .active-stroke { stroke-width: 4.5px; }
 }
