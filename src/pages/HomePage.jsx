@@ -1,11 +1,9 @@
 import { useEffect, useRef } from 'react';
-import MapPage from './MapPage.jsx';
 import TicketsPage from './TicketsPage.jsx';
 import { animateScrollTo, scrollToSection } from '../lib/navigation.js';
-import { loadNetwork } from '../lib/useNetworkData.js';
 
-/** Página principal: el mapa arriba y la sección de billetes debajo. */
-export default function HomePage({ route, nonce, theme, onSectionChange }) {
+/** Página principal: la sección «Mapa» (vacía de momento) y la de billetes debajo. */
+export default function HomePage({ route, nonce, onSectionChange }) {
   const firstRender = useRef(true);
 
   // Al pulsar «Mapa» o «Billetes» en el menú, desplazarse con animación.
@@ -13,10 +11,7 @@ export default function HomePage({ route, nonce, theme, onSectionChange }) {
     const isFirst = firstRender.current;
     firstRender.current = false;
     if (route === 'billetes') {
-      // Esperar a que el mapa esté dibujado para saber dónde empieza la sección.
-      loadNetwork()
-        .catch(() => {})
-        .then(() => requestAnimationFrame(() => scrollToSection('billetes')));
+      requestAnimationFrame(() => scrollToSection('billetes'));
     } else if (!isFirst) {
       animateScrollTo(0);
     }
@@ -36,7 +31,8 @@ export default function HomePage({ route, nonce, theme, onSectionChange }) {
 
   return (
     <>
-      <MapPage theme={theme} />
+      {/* Sección «Mapa»: vacía de momento (el mapa de la red está en «Rutas»). */}
+      <section className="page map-empty" id="mapa" aria-label="Mapa" />
       <TicketsPage />
     </>
   );
