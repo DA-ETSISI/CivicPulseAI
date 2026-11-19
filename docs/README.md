@@ -24,6 +24,7 @@ Cada fase explica qué se hizo, por qué y dónde está el código.
 | [Fase 4](fases/fase-04-radardetrenes.md) | Datos de RadarDeTrenes en toda la web y seguimiento de trenes |
 | [Fase 5](fases/fase-05-rediseno-rutas.md) | Rediseño de Rutas: comunidades, Cercanías por provincia, tipografía y color |
 | [Fase 6](fases/fase-06-paradas-y-cabeceras.md) | Rutas: etiquetas de paradas, resaltar paradas, cabeceras de línea y corrección del acordeón |
+| [Fase 7](fases/fase-07-remates-y-servicio.md) | Rutas: remates de línea y líneas en servicio según la hora (con `?hora=` para probar) |
 
 ## Fuentes de datos
 
