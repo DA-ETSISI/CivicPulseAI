@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react';
 import Header from './components/Header.jsx';
 import HomePage from './pages/HomePage.jsx';
-import ComingSoonPage from './pages/ComingSoonPage.jsx';
+import IncidentsPage from './pages/IncidentsPage.jsx';
 import RoutesPage from './pages/RoutesPage.jsx';
 import { useRoute } from './lib/navigation.js';
 import { useTheme } from './lib/theme.js';
 
-const OTHER_PAGES = {
-  incidencias: {
-    title: 'Incidencias',
-    text: 'Aquí podrás consultar retrasos, obras y cortes de vía que afecten a tu viaje.',
-  },
+/** Secciones que son páginas propias; «mapa» y «billetes» viven juntas en la página principal. */
+const PAGES = {
+  incidencias: () => <IncidentsPage />,
+  rutas: ({ theme }) => <RoutesPage theme={theme} />,
 };
 
 export default function App() {
@@ -18,23 +17,20 @@ export default function App() {
   const [theme, toggleTheme] = useTheme();
   const [section, setSection] = useState('mapa');
 
-  const isRoutes = route === 'rutas';
-  const page = OTHER_PAGES[route];
-  const current = page || isRoutes ? route : section;
+  const Page = PAGES[route];
+  const current = Page ? route : section;
 
   // Al entrar en otra página, empezar arriba del todo.
   useEffect(() => {
-    if (page || isRoutes) window.scrollTo(0, 0);
-  }, [page, isRoutes, nonce]);
+    if (Page) window.scrollTo(0, 0);
+  }, [Page, nonce]);
 
   return (
     <div className="app">
       <Header current={current} theme={theme} onToggleTheme={toggleTheme} />
       <main className="main">
-        {isRoutes ? (
-          <RoutesPage theme={theme} />
-        ) : page ? (
-          <ComingSoonPage {...page} />
+        {Page ? (
+          <Page theme={theme} />
         ) : (
           <HomePage route={route} nonce={nonce} theme={theme} onSectionChange={setSection} />
         )}
