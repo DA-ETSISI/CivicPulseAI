@@ -16,11 +16,12 @@
  *  - timetable.json  horarios de todos los trenes AV/LD/MD para el buscador de billetes
  *  - provinces.json  provincias de España
  *  - countries.json  Portugal, Francia y Andorra
- *  - cercanias.json  trazado real de las vías de Cercanías (para el mapa de incidencias)
+ *  - cercanias.json  red de Cercanías: trazado real, color oficial, estaciones y provincias de cada línea
  * Y en server/data/:
  *  - reference.json  nombres de estaciones y trenes para el servidor de incidencias en tiempo real
  */
-import { unzipSync, strFromU8 } from 'fflate';
+import { unzipSync, strFromU8, Unzip, UnzipInflate } from 'fflate';
+import { geoBounds, geoCentroid, geoContains, geoDistance } from 'd3-geo';
 import { feature } from 'topojson-client';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -137,6 +138,53 @@ const toMinutes = (hms) => {
 const ymd = (d) => d.toISOString().slice(0, 10).replaceAll('-', '');
 const parseYmd = (s) => new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)));
 
+// ---------- Provincias y comunidades autónomas ----------
+
+/** Código INE de provincia → comunidad autónoma. */
+const CCAA_BY_PROVINCE = {
+  '01': 'País Vasco', '02': 'Castilla-La Mancha', '03': 'Comunitat Valenciana', '04': 'Andalucía', '05': 'Castilla y León',
+  '06': 'Extremadura', '07': 'Illes Balears', '08': 'Cataluña', '09': 'Castilla y León', 10: 'Extremadura', 11: 'Andalucía',
+  12: 'Comunitat Valenciana', 13: 'Castilla-La Mancha', 14: 'Andalucía', 15: 'Galicia', 16: 'Castilla-La Mancha', 17: 'Cataluña',
+  18: 'Andalucía', 19: 'Castilla-La Mancha', 20: 'País Vasco', 21: 'Andalucía', 22: 'Aragón', 23: 'Andalucía', 24: 'Castilla y León',
+  25: 'Cataluña', 26: 'La Rioja', 27: 'Galicia', 28: 'Comunidad de Madrid', 29: 'Andalucía', 30: 'Región de Murcia', 31: 'Navarra',
+  32: 'Galicia', 33: 'Asturias', 34: 'Castilla y León', 35: 'Canarias', 36: 'Galicia', 37: 'Castilla y León', 38: 'Canarias',
+  39: 'Cantabria', 40: 'Castilla y León', 41: 'Andalucía', 42: 'Castilla y León', 43: 'Cataluña', 44: 'Aragón',
+  45: 'Castilla-La Mancha', 46: 'Comunitat Valenciana', 47: 'Castilla y León', 48: 'País Vasco', 49: 'Castilla y León',
+  50: 'Aragón', 51: 'Ceuta', 52: 'Melilla',
+};
+const INTERNATIONAL = 'Internacional';
+
+/**
+ * Devuelve en qué provincia (o país vecino) cae un punto, usando los polígonos a resolución completa.
+ * Si una estación costera queda justo fuera del polígono, se asigna a la provincia más cercana.
+ */
+function makeLocator(provinceGeo, countriesTopo) {
+  const provinces = provinceGeo.features.map((f) => ({
+    code: String(f.properties.cod_prov).padStart(2, '0'),
+    feature: f,
+    bounds: geoBounds(f),
+    centroid: geoCentroid(f),
+  }));
+  const neighbours = feature(countriesTopo, countriesTopo.objects.countries).features.filter((f) => [250, 620, 20].includes(Number(f.id)));
+  const inBox = ([lon, lat], [[x0, y0], [x1, y1]]) => lon >= x0 - 0.05 && lon <= x1 + 0.05 && lat >= y0 - 0.05 && lat <= y1 + 0.05;
+  const memo = new Map();
+
+  return (point) => {
+    const key = point.join(',');
+    if (memo.has(key)) return memo.get(key);
+    let result;
+    const hit = provinces.find((p) => inBox(point, p.bounds) && geoContains(p.feature, point));
+    if (hit) result = { province: hit.code, ccaa: CCAA_BY_PROVINCE[hit.code] };
+    else if (neighbours.some((c) => geoContains(c, point))) result = { province: null, ccaa: INTERNATIONAL };
+    else {
+      const near = provinces.reduce((a, b) => (geoDistance(point, a.centroid) < geoDistance(point, b.centroid) ? a : b));
+      result = { province: near.code, ccaa: CCAA_BY_PROVINCE[near.code] };
+    }
+    memo.set(key, result);
+    return result;
+  };
+}
+
 // ---------- GTFS común ----------
 
 function indexGtfs(gtfs) {
@@ -158,7 +206,7 @@ function indexGtfs(gtfs) {
  * Líneas de alta velocidad del mapa. Cada línea guarda sus números de tren y, si el servidor ya lo ha
  * aprendido de RadarDeTrenes (.cache/routes.json), el trazado real de la vía (`track`).
  */
-function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTracks = {}) {
+function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTracks = {}, locate = null) {
   const lines = new Map();
   for (const [routeId, routeTrips] of groupBy(trips, (t) => t.route_id)) {
     const type = routes.get(routeId)?.route_short_name;
@@ -198,6 +246,17 @@ function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTrack
     const trains = [...l.trainNumbers].sort();
     // El trazado más largo entre los trenes de la línea es el que cubre el recorrido completo.
     const track = trains.map((n) => learnedTracks[n]).filter(Boolean).sort((a, b) => b.length - a.length)[0] ?? null;
+
+    // Comunidades por las que pasa (en orden de recorrido) y qué paradas tiene en cada una.
+    const regions = [];
+    for (const id of l.stopIds) {
+      const st = stops.get(id);
+      const where = locate?.([+st.stop_lon, +st.stop_lat]);
+      if (!where) continue;
+      let region = regions.find((r) => r.name === where.ccaa);
+      if (!region) regions.push((region = { name: where.ccaa, stops: [] }));
+      region.stops.push(st.stop_name);
+    }
     return {
       id: l.id,
       category: l.category,
@@ -208,6 +267,7 @@ function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTrack
       stops: l.stopIds.map((id) => stops.get(id).stop_name),
       coords: [l.stopIds.map((id) => [round(+stops.get(id).stop_lon), round(+stops.get(id).stop_lat)])],
       track,
+      regions,
     };
   });
 }
@@ -323,10 +383,56 @@ const NUCLEOS = {
 };
 
 /**
- * Trazado real de cada línea de Cercanías (Renfe sí publica la forma de la vía en shapes.txt).
- * Se agrupa por núcleo + línea (p. ej. "C3 · Madrid") y se simplifica para que pese poco.
+ * Lee stop_times.txt de Cercanías (≈270 MB descomprimido) por trozos, sin cargarlo entero en memoria,
+ * y guarda solo las paradas de los viajes que interesan.
  */
-function buildCercaniasTracks(gtfs) {
+function readStopTimes(zipBuf, wantedTrips) {
+  const out = new Map();
+  const decoder = new TextDecoder();
+  let rest = '';
+  let cols = null;
+  const handle = (line) => {
+    if (!line.trim()) return;
+    const f = line.split(',');
+    if (!cols) {
+      const header = f.map((h) => h.replace(/^﻿/, '').trim());
+      cols = { trip: header.indexOf('trip_id'), stop: header.indexOf('stop_id'), seq: header.indexOf('stop_sequence') };
+      return;
+    }
+    const trip = f[cols.trip].trim();
+    if (!wantedTrips.has(trip)) return;
+    if (!out.has(trip)) out.set(trip, []);
+    out.get(trip).push([f[cols.stop].trim(), Number(f[cols.seq])]);
+  };
+
+  const unzipper = new Unzip();
+  unzipper.register(UnzipInflate);
+  unzipper.onfile = (file) => {
+    if (file.name !== 'stop_times.txt') return;
+    file.ondata = (err, chunk, final) => {
+      if (err) throw err;
+      const lines = (rest + decoder.decode(chunk, { stream: !final })).split(/\r?\n/);
+      rest = final ? '' : lines.pop();
+      lines.forEach(handle);
+    };
+    file.start();
+  };
+  unzipper.push(new Uint8Array(zipBuf), true);
+  for (const seq of out.values()) seq.sort((a, b) => a[1] - b[1]);
+  return out;
+}
+
+/** "Principe Pio<relleno hasta 40>-Aeropuerto-T4" → ["Principe Pio", "Aeropuerto-T4"] */
+function routeEnds(longName) {
+  const parts = longName[40] === '-' ? [longName.slice(0, 40), longName.slice(41)] : longName.split(/\s+-/);
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+/**
+ * Red de Cercanías y Rodalies desde el GTFS de Renfe: por cada línea (núcleo + código, p. ej. "C3 · Madrid")
+ * su trazado real (shapes.txt), su color oficial (route_color), sus estaciones y las provincias que recorre.
+ */
+function buildCercaniasNetwork(gtfs, zipBuf, locate) {
   const shapes = new Map();
   for (const [id, pts] of groupBy(gtfs['shapes.txt'], (p) => p.shape_id)) {
     const coords = pts
@@ -335,22 +441,76 @@ function buildCercaniasTracks(gtfs) {
     shapes.set(id, simplify(coords, 0.0004).map(([x, y]) => [round(x), round(y)]));
   }
   const routes = new Map(gtfs['routes.txt'].map((r) => [r.route_id, r]));
+  const stops = new Map(gtfs['stops.txt'].map((s) => [s.stop_id, s]));
 
+  // Un viaje de muestra por cada variante de recorrido (ruta + forma) basta para conocer sus paradas.
   const lines = new Map();
+  const sampleTrips = new Set();
   for (const t of gtfs['trips.txt']) {
     const route = routes.get(t.route_id);
-    const short = route?.route_short_name;
-    if (!t.shape_id || !short || short === 'BUS' || !shapes.has(t.shape_id)) continue;
+    const code = route?.route_short_name;
+    if (!code || code === 'BUS') continue;
     const nucleoId = t.route_id.slice(0, 2);
-    const id = `cer:${nucleoId}:${short}`;
-    if (!lines.has(id)) lines.set(id, { id, name: `${short} · ${NUCLEOS[nucleoId] ?? 'Cercanías'}`, shapeIds: new Set() });
-    lines.get(id).shapeIds.add(t.shape_id);
+    const id = `cer:${nucleoId}:${code}`;
+    if (!lines.has(id)) {
+      lines.set(id, { id, code, nucleoId, colors: new Map(), shapeIds: new Set(), variants: new Map(), routeIds: new Set() });
+    }
+    const line = lines.get(id);
+    line.routeIds.add(t.route_id);
+    const color = route.route_color?.toUpperCase();
+    if (color && color !== 'FFFFFF') line.colors.set(color, (line.colors.get(color) ?? 0) + 1);
+    if (t.shape_id && shapes.has(t.shape_id)) line.shapeIds.add(t.shape_id);
+    const variant = `${t.route_id}|${t.shape_id}`;
+    if (!line.variants.has(variant)) {
+      line.variants.set(variant, t.trip_id);
+      sampleTrips.add(t.trip_id);
+    }
   }
 
-  return [...lines.values()].map(({ shapeIds, ...l }) => ({
-    ...l,
-    coords: [...shapeIds].map((sid) => shapes.get(sid)).filter((c) => c.length > 1),
-  }));
+  const stopTimes = readStopTimes(zipBuf, sampleTrips);
+
+  return [...lines.values()]
+    .map((line) => {
+      // Estaciones: el recorrido más largo, más las de los ramales que no estén ya.
+      const sequences = [...line.variants.values()].map((trip) => stopTimes.get(trip) ?? []).sort((a, b) => b.length - a.length);
+      const seen = new Set();
+      const stationIds = [];
+      for (const seq of sequences) {
+        for (const [sid] of seq) {
+          if (stops.has(sid) && !seen.has(sid)) {
+            seen.add(sid);
+            stationIds.push(sid);
+          }
+        }
+      }
+      const stations = stationIds.map((sid) => {
+        const st = stops.get(sid);
+        return { name: st.stop_name, lat: round(+st.stop_lat), lon: round(+st.stop_lon) };
+      });
+
+      const provinceCodes = [...new Set(stations.map((st) => locate([st.lon, st.lat]).province).filter(Boolean))];
+      const longest = sequences[0] ?? [];
+      const ends = longest.length
+        ? [stops.get(longest[0][0])?.stop_name, stops.get(longest.at(-1)[0])?.stop_name]
+        : routeEnds(routes.get([...line.routeIds][0]).route_long_name);
+      const color = [...line.colors.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      const nucleo = NUCLEOS[line.nucleoId] ?? 'Cercanías';
+
+      return {
+        id: line.id,
+        code: line.code,
+        nucleo,
+        name: `${line.code} · ${nucleo}`,
+        color: color ? `#${color}` : null,
+        from: ends[0] ?? null,
+        to: ends[1] ?? null,
+        provinces: provinceCodes,
+        stations,
+        coords: [...line.shapeIds].map((sid) => shapes.get(sid)).filter((c) => c.length > 1),
+      };
+    })
+    .filter((l) => l.coords.length)
+    .sort((a, b) => a.nucleo.localeCompare(b.nucleo, 'es') || a.code.localeCompare(b.code, 'es', { numeric: true }));
 }
 
 // ---------- Mapa base ----------
@@ -371,15 +531,19 @@ function toMultiPolygon(geometry, tol, keepPolygon = () => true) {
   };
 }
 
-function buildProvinces(geo) {
+function buildProvinces(geo, cercaniasLines = []) {
   const clean = (name) => name.split('/').pop().replace(' De ', ' de ').trim();
+  const withNetwork = new Set(cercaniasLines.flatMap((l) => l.provinces));
   return {
     type: 'FeatureCollection',
-    features: geo.features.map((f) => ({
-      type: 'Feature',
-      properties: { name: clean(f.properties.name), code: f.properties.cod_prov },
-      geometry: toMultiPolygon(f.geometry, 0.012),
-    })),
+    features: geo.features.map((f) => {
+      const code = String(f.properties.cod_prov).padStart(2, '0');
+      return {
+        type: 'Feature',
+        properties: { name: clean(f.properties.name), code, ccaa: CCAA_BY_PROVINCE[code], cercanias: withNetwork.has(code) },
+        geometry: toMultiPolygon(f.geometry, 0.012),
+      };
+    }),
   };
 }
 
@@ -426,21 +590,33 @@ const sources = [
   },
   { name: 'RadarDeTrenes · tiempo real y trazados (datos de Renfe y ADIF)', url: 'https://radardetrenes.com' },
 ];
+const provinceGeo = JSON.parse(provBuf.toString('utf8'));
+const worldTopo = JSON.parse(worldBuf.toString('utf8'));
+const locate = makeLocator(provinceGeo, worldTopo);
+
 const learnedTracks = JSON.parse(await readFile(path.join(CACHE, 'routes.json'), 'utf8').catch(() => '{}'));
-const network = { generatedAt: new Date().toISOString(), sources, lines: buildHighSpeedLines(indexed, learnedTracks) };
+const network = { generatedAt: new Date().toISOString(), sources, lines: buildHighSpeedLines(indexed, learnedTracks, locate) };
 const timetable = { generatedAt: network.generatedAt, sources, ...buildTimetable(indexed, gtfs) };
-const provinces = buildProvinces(JSON.parse(provBuf.toString('utf8')));
-const countries = buildCountries(JSON.parse(worldBuf.toString('utf8')));
+
+const cerGtfs = unzip(cerZip, ['stops.txt', 'routes.txt', 'trips.txt', 'shapes.txt']);
+const cercanias = {
+  generatedAt: network.generatedAt,
+  source: { name: 'Renfe Data · GTFS Cercanías y Rodalies', url: 'https://data.renfe.com/dataset/horarios-cercanias' },
+  lines: buildCercaniasNetwork(cerGtfs, cerZip, locate),
+};
+const provinces = buildProvinces(provinceGeo, cercanias.lines);
+const countries = buildCountries(worldTopo);
 
 await writeFile(path.join(OUT, 'network.json'), JSON.stringify(network));
 await writeFile(path.join(OUT, 'timetable.json'), JSON.stringify(timetable));
 await writeFile(path.join(OUT, 'provinces.json'), JSON.stringify(provinces));
 await writeFile(path.join(OUT, 'countries.json'), JSON.stringify(countries));
 
-const cerGtfs = unzip(cerZip, ['stops.txt', 'routes.txt', 'trips.txt', 'shapes.txt']);
-const cercanias = { generatedAt: network.generatedAt, lines: buildCercaniasTracks(cerGtfs) };
 await writeFile(path.join(OUT, 'cercanias.json'), JSON.stringify(cercanias));
-console.log(`✔ Vías de Cercanías: ${cercanias.lines.length} líneas`);
+console.log(
+  `✔ Cercanías: ${cercanias.lines.length} líneas, ${cercanias.lines.reduce((n, l) => n + l.stations.length, 0)} estaciones, ` +
+    `${provinces.features.filter((f) => f.properties.cercanias).length} provincias con red`,
+);
 
 const reference = buildRealtimeReference(indexed, cerGtfs['stops.txt']);
 await writeFile(path.join(SERVER_OUT, 'reference.json'), JSON.stringify(reference));
