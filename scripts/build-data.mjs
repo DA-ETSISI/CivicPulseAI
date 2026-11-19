@@ -185,6 +185,71 @@ function makeLocator(provinceGeo, countriesTopo) {
   };
 }
 
+// ---------- Calendario de servicio ----------
+
+/** Fecha de hoy en Madrid (YYYYMMDD), para que el «hoy» de los datos sea el de España aunque se generen de madrugada. */
+function madridToday() {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return parts.replaceAll('-', '');
+}
+
+/**
+ * Días (índice desde `base`) en que circula cada servicio, según calendar.txt y calendar_dates.txt
+ * (altas y bajas por festivos). Devuelve Map service_id → Set de índices de día.
+ */
+function serviceCalendar(calendar, calendarDates, base, days) {
+  const dayIndex = (s) => Math.round((parseYmd(s) - base) / 86400000);
+  const removed = groupBy(calendarDates.filter((c) => c.exception_type === '2'), (c) => c.service_id);
+  const added = groupBy(calendarDates.filter((c) => c.exception_type === '1'), (c) => c.service_id);
+  const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const result = new Map();
+  for (const c of calendar) {
+    const set = new Set();
+    const from = Math.max(0, dayIndex(c.start_date));
+    const to = Math.min(days - 1, dayIndex(c.end_date));
+    for (let i = from; i <= to; i++) {
+      const date = new Date(base.getTime() + i * 86400000);
+      if (c[WEEKDAYS[date.getUTCDay()]] === '1') set.add(i);
+    }
+    for (const r of removed.get(c.service_id) ?? []) set.delete(dayIndex(r.date));
+    for (const a of added.get(c.service_id) ?? []) {
+      const i = dayIndex(a.date);
+      if (i >= 0 && i < days) set.add(i);
+    }
+    result.set(c.service_id, set);
+  }
+  // Último día que cubre el calendario (más allá no hay datos, no «sin servicio»).
+  const lastDay = Math.min(days - 1, Math.max(-1, ...calendar.map((c) => dayIndex(c.end_date))));
+  return { days: result, covered: lastDay + 1 };
+}
+
+/** Huecos sin trenes más largos que esto (la noche) cortan el horario de servicio en tramos. */
+const SERVICE_GAP_MIN = 150;
+
+/**
+ * Horario de servicio de una línea para cada día: lista de tramos [inicio, fin] en minutos desde la medianoche
+ * de ese día (pueden pasar de 1440 si un tren acaba de madrugada), o 0 si ese día no circula.
+ * Los viajes se agrupan en tramos mientras no haya un hueco de más de SERVICE_GAP_MIN minutos sin ningún tren.
+ */
+function serviceWindows(spans, days) {
+  const perDay = Array.from({ length: days }, () => []);
+  for (const { serviceDays, start, end } of spans) {
+    if (!serviceDays) continue;
+    for (const d of serviceDays) perDay[d].push([start, end]);
+  }
+  return perDay.map((list) => {
+    if (!list.length) return 0;
+    list.sort((a, b) => a[0] - b[0]);
+    const merged = [list[0].slice()];
+    for (const [s, e] of list.slice(1)) {
+      const last = merged.at(-1);
+      if (s - last[1] <= SERVICE_GAP_MIN) last[1] = Math.max(last[1], e);
+      else merged.push([s, e]);
+    }
+    return merged;
+  });
+}
+
 // ---------- GTFS común ----------
 
 function indexGtfs(gtfs) {
@@ -206,7 +271,7 @@ function indexGtfs(gtfs) {
  * Líneas de alta velocidad del mapa. Cada línea guarda sus números de tren y, si el servidor ya lo ha
  * aprendido de RadarDeTrenes (.cache/routes.json), el trazado real de la vía (`track`).
  */
-function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTracks = {}, locate = null) {
+function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTracks = {}, locate = null, serviceDays = new Map()) {
   const lines = new Map();
   for (const [routeId, routeTrips] of groupBy(trips, (t) => t.route_id)) {
     const type = routes.get(routeId)?.route_short_name;
@@ -234,8 +299,14 @@ function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTrack
       trips: 0,
       stopIds: [],
       trainNumbers: new Set(),
+      spans: [],
     };
     line.types.add(type);
+    for (const t of routeTrips) {
+      const seq = timesByTrip.get(t.trip_id);
+      if (!seq?.length) continue;
+      line.spans.push({ serviceDays: serviceDays.get(t.service_id), start: toMinutes(seq[0].departure_time), end: toMinutes(seq.at(-1).arrival_time) });
+    }
     for (const t of routeTrips) if (t.trip_short_name) line.trainNumbers.add(t.trip_short_name);
     line.trips += routeTrips.length;
     if (stopIds.length > line.stopIds.length) line.stopIds = stopIds;
@@ -268,6 +339,7 @@ function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTrack
       coords: [l.stopIds.map((id) => [round(+stops.get(id).stop_lon), round(+stops.get(id).stop_lat)])],
       track,
       regions,
+      service: serviceWindows(l.spans, DAYS),
     };
   });
 }
@@ -275,29 +347,9 @@ function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTrack
 // ---------- Horarios (buscador de billetes) ----------
 
 function buildTimetable({ stops, routes, timesByTrip, trips }, gtfs) {
-  const base = parseYmd(ymd(new Date()));
-  const dayIndex = (s) => Math.round((parseYmd(s) - base) / 86400000);
-
+  const base = parseYmd(madridToday());
   // Días de circulación de cada servicio, dentro de la ventana [hoy, hoy + DAYS)
-  const removed = groupBy(gtfs['calendar_dates.txt'].filter((c) => c.exception_type === '2'), (c) => c.service_id);
-  const added = groupBy(gtfs['calendar_dates.txt'].filter((c) => c.exception_type === '1'), (c) => c.service_id);
-  const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  const serviceDays = new Map();
-  for (const c of gtfs['calendar.txt']) {
-    const days = new Set();
-    const from = Math.max(0, dayIndex(c.start_date));
-    const to = Math.min(DAYS - 1, dayIndex(c.end_date));
-    for (let i = from; i <= to; i++) {
-      const date = new Date(base.getTime() + i * 86400000);
-      if (c[WEEKDAYS[date.getUTCDay()]] === '1') days.add(i);
-    }
-    for (const r of removed.get(c.service_id) ?? []) days.delete(dayIndex(r.date));
-    for (const a of added.get(c.service_id) ?? []) {
-      const i = dayIndex(a.date);
-      if (i >= 0 && i < DAYS) days.add(i);
-    }
-    serviceDays.set(c.service_id, days);
-  }
+  const serviceDays = serviceCalendar(gtfs['calendar.txt'], gtfs['calendar_dates.txt'], base, DAYS).days;
 
   const stationIndex = new Map();
   const stations = [];
@@ -388,6 +440,7 @@ const NUCLEOS = {
  */
 function readStopTimes(zipBuf, wantedTrips) {
   const out = new Map();
+  const spans = new Map(); // trip_id → [primera salida, última llegada] en minutos, de TODOS los viajes
   const decoder = new TextDecoder();
   let rest = '';
   let cols = null;
@@ -396,10 +449,24 @@ function readStopTimes(zipBuf, wantedTrips) {
     const f = line.split(',');
     if (!cols) {
       const header = f.map((h) => h.replace(/^﻿/, '').trim());
-      cols = { trip: header.indexOf('trip_id'), stop: header.indexOf('stop_id'), seq: header.indexOf('stop_sequence') };
+      cols = {
+        trip: header.indexOf('trip_id'),
+        stop: header.indexOf('stop_id'),
+        seq: header.indexOf('stop_sequence'),
+        arr: header.indexOf('arrival_time'),
+        dep: header.indexOf('departure_time'),
+      };
       return;
     }
     const trip = f[cols.trip].trim();
+    const dep = toMinutes(f[cols.dep].trim());
+    const arr = toMinutes(f[cols.arr].trim());
+    const span = spans.get(trip);
+    if (!span) spans.set(trip, [dep, arr]);
+    else {
+      if (dep < span[0]) span[0] = dep;
+      if (arr > span[1]) span[1] = arr;
+    }
     if (!wantedTrips.has(trip)) return;
     if (!out.has(trip)) out.set(trip, []);
     out.get(trip).push([f[cols.stop].trim(), Number(f[cols.seq])]);
@@ -419,7 +486,7 @@ function readStopTimes(zipBuf, wantedTrips) {
   };
   unzipper.push(new Uint8Array(zipBuf), true);
   for (const seq of out.values()) seq.sort((a, b) => a[1] - b[1]);
-  return out;
+  return { sequences: out, spans };
 }
 
 /** "Principe Pio<relleno hasta 40>-Aeropuerto-T4" → ["Principe Pio", "Aeropuerto-T4"] */
@@ -432,7 +499,7 @@ function routeEnds(longName) {
  * Red de Cercanías y Rodalies desde el GTFS de Renfe: por cada línea (núcleo + código, p. ej. "C3 · Madrid")
  * su trazado real (shapes.txt), su color oficial (route_color), sus estaciones y las provincias que recorre.
  */
-function buildCercaniasNetwork(gtfs, zipBuf, locate) {
+function buildCercaniasNetwork(gtfs, zipBuf, locate, serviceDays) {
   const shapes = new Map();
   for (const [id, pts] of groupBy(gtfs['shapes.txt'], (p) => p.shape_id)) {
     const coords = pts
@@ -453,9 +520,10 @@ function buildCercaniasNetwork(gtfs, zipBuf, locate) {
     const nucleoId = t.route_id.slice(0, 2);
     const id = `cer:${nucleoId}:${code}`;
     if (!lines.has(id)) {
-      lines.set(id, { id, code, nucleoId, colors: new Map(), shapeIds: new Set(), variants: new Map(), routeIds: new Set() });
+      lines.set(id, { id, code, nucleoId, colors: new Map(), shapeIds: new Set(), variants: new Map(), routeIds: new Set(), trips: [] });
     }
     const line = lines.get(id);
+    line.trips.push(t);
     line.routeIds.add(t.route_id);
     const color = route.route_color?.toUpperCase();
     if (color && color !== 'FFFFFF') line.colors.set(color, (line.colors.get(color) ?? 0) + 1);
@@ -467,7 +535,7 @@ function buildCercaniasNetwork(gtfs, zipBuf, locate) {
     }
   }
 
-  const stopTimes = readStopTimes(zipBuf, sampleTrips);
+  const { sequences: stopTimes, spans: tripSpans } = readStopTimes(zipBuf, sampleTrips);
 
   return [...lines.values()]
     .map((line) => {
@@ -507,6 +575,12 @@ function buildCercaniasNetwork(gtfs, zipBuf, locate) {
         provinces: provinceCodes,
         stations,
         coords: [...line.shapeIds].map((sid) => shapes.get(sid)).filter((c) => c.length > 1),
+        service: serviceWindows(
+          line.trips
+            .filter((t) => tripSpans.has(t.trip_id))
+            .map((t) => ({ serviceDays: serviceDays.get(t.service_id), start: tripSpans.get(t.trip_id)[0], end: tripSpans.get(t.trip_id)[1] })),
+          DAYS,
+        ),
       };
     })
     .filter((l) => l.coords.length)
@@ -594,15 +668,29 @@ const provinceGeo = JSON.parse(provBuf.toString('utf8'));
 const worldTopo = JSON.parse(worldBuf.toString('utf8'));
 const locate = makeLocator(provinceGeo, worldTopo);
 
+const serviceBase = parseYmd(madridToday());
+const serviceBaseIso = serviceBase.toISOString().slice(0, 10);
+const ldCalendar = serviceCalendar(gtfs['calendar.txt'], gtfs['calendar_dates.txt'], serviceBase, DAYS);
+
 const learnedTracks = JSON.parse(await readFile(path.join(CACHE, 'routes.json'), 'utf8').catch(() => '{}'));
-const network = { generatedAt: new Date().toISOString(), sources, lines: buildHighSpeedLines(indexed, learnedTracks, locate) };
+const network = {
+  generatedAt: new Date().toISOString(),
+  sources,
+  // Horario de servicio: line.service[d] = tramos [[inicio, fin], …] del día serviceBase + d (o 0 si no circula).
+  serviceBase: serviceBaseIso,
+  serviceDays: ldCalendar.covered,
+  lines: buildHighSpeedLines(indexed, learnedTracks, locate, ldCalendar.days),
+};
 const timetable = { generatedAt: network.generatedAt, sources, ...buildTimetable(indexed, gtfs) };
 
-const cerGtfs = unzip(cerZip, ['stops.txt', 'routes.txt', 'trips.txt', 'shapes.txt']);
+const cerGtfs = unzip(cerZip, ['stops.txt', 'routes.txt', 'trips.txt', 'shapes.txt', 'calendar.txt']);
+const cerCalendar = serviceCalendar(cerGtfs['calendar.txt'], [], serviceBase, DAYS);
 const cercanias = {
   generatedAt: network.generatedAt,
   source: { name: 'Renfe Data · GTFS Cercanías y Rodalies', url: 'https://data.renfe.com/dataset/horarios-cercanias' },
-  lines: buildCercaniasNetwork(cerGtfs, cerZip, locate),
+  serviceBase: serviceBaseIso,
+  serviceDays: cerCalendar.covered,
+  lines: buildCercaniasNetwork(cerGtfs, cerZip, locate, cerCalendar.days),
 };
 const provinces = buildProvinces(provinceGeo, cercanias.lines);
 const countries = buildCountries(worldTopo);
