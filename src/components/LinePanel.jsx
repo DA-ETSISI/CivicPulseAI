@@ -6,6 +6,9 @@ import { splitByService } from '../lib/serviceStatus.js';
 
 const SERVICE_LABEL = { AVE: 'AVE', AVLO: 'AVLO', 'AVE Euromed': 'Euromed' };
 
+/** Color de la red de una comunidad: el de su ruta principal (la que tiene más trenes programados). */
+const regionColor = (items) => items.reduce((best, it) => (it.line.trips > (best?.trips ?? -1) ? it.line : best), null)?.color;
+
 /** Texto con la parte que coincide con la búsqueda resaltada. */
 function Highlight({ text, query }) {
   const parts = splitMatch(text, query) ?? [{ text, match: false }];
@@ -61,8 +64,9 @@ export default function LinePanel({ lines, selected, hoveredId, highlightedStop,
             const expanded = isOpen(g.name);
             const panelId = `region-${g.name.replace(/\W+/g, '-')}`;
             return (
-              <li key={g.name} className={`region${expanded ? ' is-open' : ''}`}>
+              <li key={g.name} className={`region${expanded ? ' is-open' : ''}`} style={{ '--region': regionColor(g.items) }}>
                 <h3>
+                  {/* Solo visual: pasar el ratón por la cabecera no resalta ninguna línea del mapa. */}
                   <button type="button" className="region-head" aria-expanded={expanded} aria-controls={panelId} onClick={() => toggle(g.name)}>
                     <IconChevron size={16} className="region-chevron" />
                     <span className="region-name">{g.name}</span>

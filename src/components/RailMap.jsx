@@ -1,10 +1,13 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { WIDTH, buildBase, buildGeometry } from '../lib/mapGeometry.js';
 import { useMapZoom } from '../lib/useMapZoom.js';
-import { LABEL_FONT_PX, clearLabelCache, groupTerminals, placeLabels } from '../lib/mapLabels.js';
+import { LABEL_FONT_PX, clearLabelCache, groupTerminals, measureLabel, placeLabels } from '../lib/mapLabels.js';
 import { BaseLayer, LabelLayer, ProvinceLayer, ZoomControls } from './MapBase.jsx';
+import { IconAlert } from './icons.jsx';
 
 const STAGGER_MS = 90;
+/** Margen del encuadre inicial (unidades del mapa) para que las etiquetas de las cabeceras no se corten. */
+const FIT_PAD = 56;
 const MAX_STAGGER_MS = 900;
 const DRAW_MS = 900;
 /** Cabeceras con al menos tantas líneas llevan el nombre de la ciudad en la vista general. */
@@ -33,17 +36,20 @@ function useNarrow() {
  * Píxeles de pantalla por unidad del mapa. Las líneas se dibujan con grosor fijo en pantalla
  * (non-scaling-stroke) y los remates en unidades del mapa, así que hay que convertir para que encajen.
  */
-function useSvgScale(svgRef) {
+export function useSvgScale(svgRef, height) {
   const [scale, setScale] = useState(1);
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return undefined;
-    const measure = () => setScale(svg.getBoundingClientRect().width / WIDTH || 1);
+    const measure = () => {
+      const r = svg.getBoundingClientRect();
+      setScale(Math.min(r.width / WIDTH, r.height / height) || 1);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [svgRef]);
+  }, [svgRef, height]);
   return scale;
 }
 
@@ -55,6 +61,17 @@ function pathEnds(coords, project) {
   const segs = coords.filter((c) => c.length > 1);
   if (!segs.length) return [];
   return [project(segs[0][0]), project(segs.at(-1).at(-1))].filter(Boolean);
+}
+
+const CITY_FONT_PX = 13;
+const overlap = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+
+/** Caja (en unidades del mapa) que ocupa un texto de `px` píxeles de pantalla con el zoom `k`. */
+function labelBox(text, x, y, px, k, anchor) {
+  const w = (measureLabel(text) * (px / LABEL_FONT_PX)) / k;
+  const h = (px * 1.2) / k;
+  const x0 = anchor === 'end' ? x - w : anchor === 'middle' ? x - w / 2 : x;
+  return { x0, x1: x0 + w, y0: y - h / 2, y1: y + h / 2 };
 }
 
 /** Vuelve a medir las etiquetas cuando termina de cargar la fuente. */
@@ -99,17 +116,21 @@ export default function RailMap({
   const pointerType = useRef('mouse');
   const [tip, setTip] = useState(null);
   const [touchPreviewId, setTouchPreviewId] = useState(null);
+  const [noNetwork, setNoNetwork] = useState(null);
   const widths = useNarrow() ? WIDTHS_NARROW : WIDTHS;
-  const unitPx = useSvgScale(svgRef);
   const [stopHoverLine, setStopHoverLine] = useState(null);
   const fontsReady = useFontsReady();
 
   // Encuadre: provincias + Portugal + todos los puntos de todas las rutas.
-  const fitPoints = useMemo(() => fitLines.flatMap((l) => l.coords.flat()), [fitLines]);
-  const geo = useMemo(() => buildGeometry(provinces, countries, fitPoints), [provinces, countries, fitPoints]);
+  // Encuadre inicial: todas las paradas y trazados de todas las rutas (Francia incluida), con margen
+  // suficiente para que ningún remate ni etiqueta quede cortado en el borde.
+  const fitPoints = useMemo(() => fitLines.flatMap((l) => [...l.coords.flat(), ...(l.stopCoords ?? [])]), [fitLines]);
+  const geo = useMemo(() => buildGeometry(provinces, countries, fitPoints, { pad: FIT_PAD }), [provinces, countries, fitPoints]);
+  const unitPx = useSvgScale(svgRef, geo.height);
   const base = useMemo(() => buildBase(provinces, countries, geo), [provinces, countries, geo]);
   const { transform, zoomBy, reset, fitBounds, fading } = useMapZoom(svgRef, geo.height, { northSlack: 0 });
   const k = transform.k;
+  const ks = k * unitPx; // píxeles de pantalla por unidad del mapa con el zoom actual (para rotular en px reales)
 
   const lineShapes = useMemo(
     () =>
@@ -152,20 +173,37 @@ export default function RailMap({
   // Cabeceras de la vista general, agrupadas según el zoom actual.
   const terminals = useMemo(() => groupTerminals(lineShapes, k), [lineShapes, k]);
   // Una sola etiqueta por ciudad (con zoom, Atocha y Chamartín pueden quedar en grupos distintos).
+  // Ciudades cabecera rotuladas: una por ciudad y, si chocan entre sí, gana la que tiene más líneas
+  // (así no se pisan las de la costa —Barcelona, València, Alicante…— a zoom bajo).
   const cityLabels = useMemo(() => {
     const byCity = new Map();
     for (const g of terminals) {
       if (g.lineIds.length < CITY_LABEL_MIN_LINES) continue;
       if (!byCity.has(g.city) || byCity.get(g.city).lineIds.length < g.lineIds.length) byCity.set(g.city, g);
     }
-    return [...byCity.values()];
-  }, [terminals]);
-  // No repetir «Madrid» como provincia y como ciudad (se compara sin tildes: Valencia / València).
+    const placed = [];
+    for (const g of [...byCity.values()].sort((a, b) => b.lineIds.length - a.lineIds.length)) {
+      const box = labelBox(g.city, g.x - 6 / ks, g.y, CITY_FONT_PX, ks, 'end');
+      if (placed.some((p) => overlap(p.box, box))) continue;
+      placed.push({ ...g, box });
+    }
+    return placed;
+  }, [terminals, ks]);
+  // Nombres de provincia que se ocultan: los que repiten una ciudad rotulada (Valencia / València)
+  // y los que quedarían debajo de la etiqueta de una ciudad.
   const hiddenProvinceLabels = useMemo(() => {
     const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
     const cities = new Set(cityLabels.flatMap((g) => g.city.split('/').map(norm)));
-    return new Set(base.provinceShapes.filter((p) => cities.has(norm(p.name))).map((p) => p.name));
-  }, [cityLabels, base]);
+    return new Set(
+      base.provinceShapes
+        .filter((p) => {
+          if (cities.has(norm(p.name))) return true;
+          const box = labelBox(p.name, p.x, p.y, p.size * Math.sqrt(k), k, 'middle');
+          return cityLabels.some((c) => overlap(c.box, box));
+        })
+        .map((p) => p.name),
+    );
+  }, [cityLabels, base, k]);
 
   // Cámara: al elegir una ruta se encuadra; al entrar o salir de una provincia, vuelo de ida o de vuelta.
   const firstRun = useRef(true);
@@ -185,6 +223,13 @@ export default function RailMap({
     // Se reacciona al id elegido, no a cada nuevo objeto de la ruta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provinceCode, selectedId, base, fitBounds, reset]);
+
+  // El aviso de «provincia sin Cercanías» desaparece solo a los pocos segundos.
+  useEffect(() => {
+    if (!noNetwork) return undefined;
+    const t = setTimeout(() => setNoNetwork(null), 4500);
+    return () => clearTimeout(t);
+  }, [noNetwork]);
 
   // Si cambia la selección, se olvida la previsualización táctil.
   useEffect(() => setTouchPreviewId(null), [selectedId, provinceCode]);
@@ -226,8 +271,9 @@ export default function RailMap({
       clearFocus();
       return;
     }
-    // Las provincias sin red de Cercanías no reaccionan al clic (solo muestran un texto al pasar el ratón).
+    // Las provincias sin red de Cercanías no hacen zoom: muestran un aviso en rojo.
     if (shape.hasNetwork) onProvincePick(shape.code);
+    else setNoNetwork({ name: shape.name, at: Date.now() });
   };
 
   const svgClass = [
@@ -294,6 +340,7 @@ export default function RailMap({
             <StopLayer
               shape={selected}
               k={k}
+              ks={ks}
               mode="selected"
               width={widths.selected / unitPx}
               showLabels={!previewLabels}
@@ -306,6 +353,7 @@ export default function RailMap({
             <StopLayer
               shape={preview}
               k={k}
+              ks={ks}
               mode="preview"
               width={widths.preview / unitPx}
               showLabels={previewLabels}
@@ -345,7 +393,7 @@ export default function RailMap({
             />
           )}
           <LabelLayer {...base} k={k} hidden={provinceCode ? null : hiddenProvinceLabels} />
-          {!provinceCode && !selected && !preview && <CityLabels groups={cityLabels} k={k} />}
+          {!provinceCode && !selected && !preview && <CityLabels groups={cityLabels} k={ks} />}
         </g>
       </svg>
 
@@ -359,6 +407,14 @@ export default function RailMap({
       />
 
       {province?.status === 'loading' && <CercaniasLoader />}
+      {noNetwork && (
+        <div key={noNetwork.at} className="map-alert" role="alert">
+          <IconAlert size={18} />
+          <span>
+            <strong>{noNetwork.name}:</strong> esta provincia no tiene red de Cercanías.
+          </span>
+        </div>
+      )}
 
       {tip && (
         <div className={`map-tooltip${tip.flip ? ' is-flipped' : ''}`} style={{ left: tip.x, top: tip.y }}>
@@ -422,15 +478,19 @@ const LineLayer = memo(function LineLayer({ shapes, activeIds, k, capWidth, onHo
  * Paradas de una línea (previsualizada o fijada) y sus etiquetas, colocadas sin solaparse.
  * En la línea fijada, cada parada se puede pulsar o elegir con el teclado (Tab + Enter/Espacio).
  */
-function StopLayer({ shape, k, mode, width, showLabels, highlighted, fontsReady, onStopEnter, onStopLeave, onActivate }) {
+function StopLayer({ shape, k, ks = k, mode, width, showLabels, highlighted, fontsReady, onStopEnter, onStopLeave, onActivate }) {
   const { line, d, stops, ends } = shape;
   const last = stops.length - 1;
-  const labels = useMemo(
-    () => (showLabels ? placeLabels(stops, line.stops, k, [0, last, ...(highlighted != null ? [highlighted] : [])]) : null),
+  // Etiquetas en px reales de pantalla (ks = zoom × escala del SVG). Las intermedias que no caben sin
+  // solaparse se ocultan; aparecen al acercar el zoom.
+  const labels = useMemo(() => {
+    if (!showLabels) return null;
+    const keep = new Set([0, last, ...(highlighted != null ? [highlighted] : [])]);
+    const optional = new Set(stops.map((_, i) => i).filter((i) => !keep.has(i)));
+    return placeLabels(stops, line.stops, ks, [...keep], { optional });
     // fontsReady fuerza a recolocar cuando ya se conoce el ancho real del texto.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showLabels, stops, line.stops, k, highlighted, last, fontsReady],
-  );
+  }, [showLabels, stops, line.stops, ks, highlighted, last, fontsReady]);
   const hasHighlight = mode === 'selected' && highlighted != null;
 
   return (
@@ -446,7 +506,7 @@ function StopLayer({ shape, k, mode, width, showLabels, highlighted, fontsReady,
       {labels && (
         <g className="stop-labels" pointerEvents="none">
           {labels.map((l, i) =>
-            l?.leader ? <line key={`l${i}`} x1={l.leader[0]} y1={l.leader[1]} x2={l.leader[2]} y2={l.leader[3]} strokeWidth={1 / k} /> : null,
+            l?.leader ? <line key={`l${i}`} x1={l.leader[0]} y1={l.leader[1]} x2={l.leader[2]} y2={l.leader[3]} strokeWidth={1 / ks} /> : null,
           )}
           {labels.map((l, i) =>
             l ? (
@@ -454,8 +514,8 @@ function StopLayer({ shape, k, mode, width, showLabels, highlighted, fontsReady,
                 key={i}
                 x={l.x}
                 y={l.y}
-                fontSize={LABEL_FONT_PX / k}
-                strokeWidth={3 / k}
+                fontSize={LABEL_FONT_PX / ks}
+                strokeWidth={3 / ks}
                 className={`${i === highlighted && mode === 'selected' ? 'is-highlighted' : ''}${i === 0 || i === last ? ' is-terminal' : ''}`}
               >
                 {line.stops[i]}
@@ -514,7 +574,7 @@ function CityLabels({ groups, k }) {
   return (
     <g className="city-labels" pointerEvents="none" aria-hidden="true">
       {groups.map((g) => (
-        <text key={g.city} x={g.x - 6 / k} y={g.y} fontSize={12 / k} strokeWidth={3.2 / k}>
+        <text key={g.city} x={g.x - 6 / k} y={g.y} fontSize={CITY_FONT_PX / k} strokeWidth={3.2 / k}>
           {g.city}
         </text>
       ))}

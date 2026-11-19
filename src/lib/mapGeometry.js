@@ -16,7 +16,7 @@ const COUNTRY_LABELS = [
  * Proyecciones: península + países vecinos, y Canarias en un recuadro aparte.
  * `fitPoints` ([lon, lat]) amplía el encuadre inicial, p. ej. para que se vean enteras las rutas a Francia.
  */
-export function buildGeometry(provinces, countries, fitPoints = [NORTH_EAST]) {
+export function buildGeometry(provinces, countries, fitPoints = [NORTH_EAST], { pad = PAD } = {}) {
   const mainland = provinces.features.filter((f) => !CANARY.has(f.properties.code));
   const canary = { type: 'FeatureCollection', features: provinces.features.filter((f) => CANARY.has(f.properties.code)) };
   const portugal = countries.features.filter((f) => f.properties.name === 'Portugal');
@@ -25,11 +25,11 @@ export function buildGeometry(provinces, countries, fitPoints = [NORTH_EAST]) {
     features: [...mainland, ...portugal, { type: 'Feature', geometry: { type: 'MultiPoint', coordinates: fitPoints } }],
   };
 
-  const projection = geoConicConformal().parallels([37, 44]).rotate([3, 0]).fitWidth(WIDTH - 2 * PAD, target);
+  const projection = geoConicConformal().parallels([37, 44]).rotate([3, 0]).fitWidth(WIDTH - 2 * pad, target);
   const [[x0, y0], [, y1]] = geoPath(projection).bounds(target);
   const [tx, ty] = projection.translate();
-  projection.translate([tx + PAD - x0, ty + PAD - y0]);
-  const height = Math.round(y1 - y0 + 2 * PAD);
+  projection.translate([tx + pad - x0, ty + pad - y0]);
+  const height = Math.round(y1 - y0 + 2 * pad);
 
   const inset = { x: PAD, y: height - PAD - 92, w: 200, h: 92 };
   const insetProjection = geoMercator().fitExtent(

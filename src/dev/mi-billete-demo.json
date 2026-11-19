@@ -1,0 +1,85 @@
+{
+  "_info": "Datos FICTICIOS para el modo demo de «Mi billete» (solo en desarrollo). Números de tren, horarios y vías inventados; estaciones reales solo para dibujar el mapa. Sin datos personales.",
+  "trips": {
+    "transbordo": {
+      "legs": [
+        {
+          "number": "09101",
+          "type": "AVE",
+          "platform": "7",
+          "stops": [
+            { "name": "Madrid Puerta de Atocha", "lat": 40.4065, "lon": -3.6895, "dep": "09:00" },
+            { "name": "Ciudad Real", "lat": 38.9806, "lon": -3.9147, "arr": "09:50", "dep": "09:52" },
+            { "name": "Puertollano", "lat": 38.693, "lon": -4.1083, "arr": "10:05", "dep": "10:07" },
+            { "name": "Córdoba", "lat": 37.8885, "lon": -4.7891, "arr": "10:45" }
+          ]
+        },
+        {
+          "number": "09207",
+          "type": "AVANT",
+          "platform": "3",
+          "stops": [
+            { "name": "Córdoba", "lat": 37.8885, "lon": -4.7891, "dep": "11:05" },
+            { "name": "Puente Genil-Herrera", "lat": 37.3545, "lon": -4.6888, "arr": "11:30", "dep": "11:31" },
+            { "name": "Antequera-Santa Ana", "lat": 37.048, "lon": -4.6087, "arr": "11:45", "dep": "11:46" },
+            { "name": "Málaga María Zambrano", "lat": 36.7118, "lon": -4.4318, "arr": "12:00" }
+          ]
+        }
+      ],
+      "alternatives": [
+        [
+          { "number": "09219", "type": "AVANT", "dep": "11:40", "arr": "12:35", "stopsBetween": 2 },
+          { "number": "09231", "type": "AVE", "dep": "12:30", "arr": "13:20", "stopsBetween": 0 },
+          { "number": "09243", "type": "AVANT", "dep": "13:40", "arr": "14:35", "stopsBetween": 2 }
+        ]
+      ]
+    },
+    "dos-transbordos": {
+      "legs": [
+        {
+          "number": "09311",
+          "type": "AVE",
+          "platform": "4",
+          "stops": [
+            { "name": "Madrid Puerta de Atocha", "lat": 40.4065, "lon": -3.6895, "dep": "08:00" },
+            { "name": "Guadalajara-Yebes", "lat": 40.5845, "lon": -3.1325, "arr": "08:25", "dep": "08:26" },
+            { "name": "Calatayud", "lat": 41.3553, "lon": -1.639, "arr": "08:55", "dep": "08:56" },
+            { "name": "Zaragoza Delicias", "lat": 41.6584, "lon": -0.9118, "arr": "09:20" }
+          ]
+        },
+        {
+          "number": "09415",
+          "type": "AVANT",
+          "platform": "2",
+          "stops": [
+            { "name": "Zaragoza Delicias", "lat": 41.6584, "lon": -0.9118, "dep": "09:40" },
+            { "name": "Huesca", "lat": 42.1336, "lon": -0.4106, "arr": "10:20" }
+          ]
+        },
+        {
+          "number": "09523",
+          "type": "Regional",
+          "platform": "1",
+          "stops": [
+            { "name": "Huesca", "lat": 42.1336, "lon": -0.4106, "dep": "10:45" },
+            { "name": "Ayerbe", "lat": 42.2729, "lon": -0.6871, "arr": "11:25", "dep": "11:26" },
+            { "name": "Jaca", "lat": 42.5733, "lon": -0.547, "arr": "12:30", "dep": "12:33" },
+            { "name": "Canfranc", "lat": 42.7522, "lon": -0.5139, "arr": "13:00" }
+          ]
+        }
+      ],
+      "alternatives": [[], []]
+    }
+  },
+  "scenarios": [
+    { "id": "normal", "label": "Normal", "trip": "transbordo", "clock": "08:35" },
+    { "id": "retraso-leve", "label": "Retraso leve", "trip": "transbordo", "clock": "08:50", "delays": { "09101": 6 } },
+    { "id": "riesgo", "label": "Retraso que pone en riesgo el transbordo", "trip": "transbordo", "clock": "09:40", "delays": { "09101": 16 } },
+    { "id": "perdido", "label": "Transbordo perdido", "trip": "transbordo", "clock": "10:30", "delays": { "09101": 32 } },
+    { "id": "cancelado", "label": "Tren cancelado", "trip": "transbordo", "clock": "08:35", "incidents": { "09207": { "cancelled": true } } },
+    { "id": "cambio-via", "label": "Cambio de vía", "trip": "transbordo", "clock": "08:45", "incidents": { "09101": { "platform": "12" } } },
+    { "id": "dos-transbordos", "label": "Viaje con 2 transbordos", "trip": "dos-transbordos", "clock": "07:40" },
+    { "id": "salido", "label": "Tren ya salido", "trip": "transbordo", "clock": "09:20" },
+    { "id": "terminado", "label": "Viaje terminado", "trip": "transbordo", "clock": "12:20" }
+  ]
+}
