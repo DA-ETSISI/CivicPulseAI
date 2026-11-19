@@ -6,7 +6,9 @@
  *
  * Fuentes:
  *  - Renfe Data (GTFS Alta Velocidad, Larga y Media Distancia): https://data.renfe.com/dataset/horarios-de-alta-velocidad-larga-distancia-y-media-distancia
+ *  - Renfe Data (GTFS Cercanías y Rodalies):                     https://data.renfe.com/dataset/horarios-cercanias
  *  - Límites provinciales (derivados de IGN/CNIG):               https://github.com/codeforgermany/click_that_hood
+ *  - RadarDeTrenes (tiempo real y trazado real de las vías):     https://radardetrenes.com/openapi.json
  *  - Países vecinos (Natural Earth, vía world-atlas):            https://github.com/topojson/world-atlas
  *
  * Salida en public/data/:
@@ -14,6 +16,7 @@
  *  - timetable.json  horarios de todos los trenes AV/LD/MD para el buscador de billetes
  *  - provinces.json  provincias de España
  *  - countries.json  Portugal, Francia y Andorra
+ *  - cercanias.json  trazado real de las vías de Cercanías (para el mapa de incidencias)
  * Y en server/data/:
  *  - reference.json  nombres de estaciones y trenes para el servidor de incidencias en tiempo real
  */
@@ -151,7 +154,11 @@ function indexGtfs(gtfs) {
 
 // ---------- Líneas de alta velocidad (mapa) ----------
 
-function buildHighSpeedLines({ stops, routes, timesByTrip, trips }) {
+/**
+ * Líneas de alta velocidad del mapa. Cada línea guarda sus números de tren y, si el servidor ya lo ha
+ * aprendido de RadarDeTrenes (.cache/routes.json), el trazado real de la vía (`track`).
+ */
+function buildHighSpeedLines({ stops, routes, timesByTrip, trips }, learnedTracks = {}) {
   const lines = new Map();
   for (const [routeId, routeTrips] of groupBy(trips, (t) => t.route_id)) {
     const type = routes.get(routeId)?.route_short_name;
@@ -171,22 +178,38 @@ function buildHighSpeedLines({ stops, routes, timesByTrip, trips }) {
     const pair = [ca, cb].sort((x, y) => x.localeCompare(y, 'es'));
     const key = `av:${pair.join('|')}`;
 
-    const line = lines.get(key) ?? { id: key, category: 'av', name: `${pair[0]} – ${pair[1]}`, types: new Set(), trips: 0, stopIds: [] };
+    const line = lines.get(key) ?? {
+      id: key,
+      category: 'av',
+      name: `${pair[0]} – ${pair[1]}`,
+      types: new Set(),
+      trips: 0,
+      stopIds: [],
+      trainNumbers: new Set(),
+    };
     line.types.add(type);
+    for (const t of routeTrips) if (t.trip_short_name) line.trainNumbers.add(t.trip_short_name);
     line.trips += routeTrips.length;
     if (stopIds.length > line.stopIds.length) line.stopIds = stopIds;
     lines.set(key, line);
   }
 
-  return [...lines.values()].map((l) => ({
-    id: l.id,
-    category: l.category,
-    name: l.name,
-    types: [...l.types].sort(),
-    trips: l.trips,
-    stops: l.stopIds.map((id) => stops.get(id).stop_name),
-    coords: [l.stopIds.map((id) => [round(+stops.get(id).stop_lon), round(+stops.get(id).stop_lat)])],
-  }));
+  return [...lines.values()].map((l) => {
+    const trains = [...l.trainNumbers].sort();
+    // El trazado más largo entre los trenes de la línea es el que cubre el recorrido completo.
+    const track = trains.map((n) => learnedTracks[n]).filter(Boolean).sort((a, b) => b.length - a.length)[0] ?? null;
+    return {
+      id: l.id,
+      category: l.category,
+      name: l.name,
+      types: [...l.types].sort(),
+      trips: l.trips,
+      trains,
+      stops: l.stopIds.map((id) => stops.get(id).stop_name),
+      coords: [l.stopIds.map((id) => [round(+stops.get(id).stop_lon), round(+stops.get(id).stop_lat)])],
+      track,
+    };
+  });
 }
 
 // ---------- Horarios (buscador de billetes) ----------
@@ -291,6 +314,45 @@ function buildRealtimeReference({ stops, routes, timesByTrip, trips }, cerStops)
   return { stops: names, trains };
 }
 
+// ---------- Vías de Cercanías ----------
+
+const NUCLEOS = {
+  10: 'Madrid', 20: 'Asturias', 30: 'Sevilla', 31: 'Cádiz', 32: 'Málaga', 40: 'Valencia',
+  41: 'Murcia/Alicante', 45: 'Cartagena', 46: 'Ferrol', 47: 'León', 50: 'Rodalies de Catalunya',
+  51: 'Rodalies de Catalunya', 60: 'Bilbao', 61: 'San Sebastián', 62: 'Santander', 70: 'Zaragoza',
+};
+
+/**
+ * Trazado real de cada línea de Cercanías (Renfe sí publica la forma de la vía en shapes.txt).
+ * Se agrupa por núcleo + línea (p. ej. "C3 · Madrid") y se simplifica para que pese poco.
+ */
+function buildCercaniasTracks(gtfs) {
+  const shapes = new Map();
+  for (const [id, pts] of groupBy(gtfs['shapes.txt'], (p) => p.shape_id)) {
+    const coords = pts
+      .sort((a, b) => Number(a.shape_pt_sequence) - Number(b.shape_pt_sequence))
+      .map((p) => [+p.shape_pt_lon, +p.shape_pt_lat]);
+    shapes.set(id, simplify(coords, 0.0004).map(([x, y]) => [round(x), round(y)]));
+  }
+  const routes = new Map(gtfs['routes.txt'].map((r) => [r.route_id, r]));
+
+  const lines = new Map();
+  for (const t of gtfs['trips.txt']) {
+    const route = routes.get(t.route_id);
+    const short = route?.route_short_name;
+    if (!t.shape_id || !short || short === 'BUS' || !shapes.has(t.shape_id)) continue;
+    const nucleoId = t.route_id.slice(0, 2);
+    const id = `cer:${nucleoId}:${short}`;
+    if (!lines.has(id)) lines.set(id, { id, name: `${short} · ${NUCLEOS[nucleoId] ?? 'Cercanías'}`, shapeIds: new Set() });
+    lines.get(id).shapeIds.add(t.shape_id);
+  }
+
+  return [...lines.values()].map(({ shapeIds, ...l }) => ({
+    ...l,
+    coords: [...shapeIds].map((sid) => shapes.get(sid)).filter((c) => c.length > 1),
+  }));
+}
+
 // ---------- Mapa base ----------
 
 function cleanRing(ring, tol, digits) {
@@ -362,8 +424,10 @@ const sources = [
     name: 'Renfe Data · GTFS Alta Velocidad, Larga y Media Distancia',
     url: 'https://data.renfe.com/dataset/horarios-de-alta-velocidad-larga-distancia-y-media-distancia',
   },
+  { name: 'RadarDeTrenes · tiempo real y trazados (datos de Renfe y ADIF)', url: 'https://radardetrenes.com' },
 ];
-const network = { generatedAt: new Date().toISOString(), sources, lines: buildHighSpeedLines(indexed) };
+const learnedTracks = JSON.parse(await readFile(path.join(CACHE, 'routes.json'), 'utf8').catch(() => '{}'));
+const network = { generatedAt: new Date().toISOString(), sources, lines: buildHighSpeedLines(indexed, learnedTracks) };
 const timetable = { generatedAt: network.generatedAt, sources, ...buildTimetable(indexed, gtfs) };
 const provinces = buildProvinces(JSON.parse(provBuf.toString('utf8')));
 const countries = buildCountries(JSON.parse(worldBuf.toString('utf8')));
@@ -373,11 +437,15 @@ await writeFile(path.join(OUT, 'timetable.json'), JSON.stringify(timetable));
 await writeFile(path.join(OUT, 'provinces.json'), JSON.stringify(provinces));
 await writeFile(path.join(OUT, 'countries.json'), JSON.stringify(countries));
 
-const cerStops = unzip(cerZip, ['stops.txt'])['stops.txt'];
-const reference = buildRealtimeReference(indexed, cerStops);
+const cerGtfs = unzip(cerZip, ['stops.txt', 'routes.txt', 'trips.txt', 'shapes.txt']);
+const cercanias = { generatedAt: network.generatedAt, lines: buildCercaniasTracks(cerGtfs) };
+await writeFile(path.join(OUT, 'cercanias.json'), JSON.stringify(cercanias));
+console.log(`✔ Vías de Cercanías: ${cercanias.lines.length} líneas`);
+
+const reference = buildRealtimeReference(indexed, cerGtfs['stops.txt']);
 await writeFile(path.join(SERVER_OUT, 'reference.json'), JSON.stringify(reference));
 console.log(`✔ Referencia tiempo real: ${Object.keys(reference.stops).length} estaciones, ${Object.keys(reference.trains).length} trenes`);
 
 console.log(
-  `✔ Mapa: ${network.lines.length} líneas AV · Billetes: ${timetable.trains.length} trenes, ${timetable.stations.length} estaciones, ${DAYS} días desde ${timetable.base} · ${provinces.features.length} provincias · ${countries.features.length} países`,
+  `✔ Mapa: ${network.lines.length} líneas AV (${network.lines.filter((l) => l.track).length} con trazado real) · Billetes: ${timetable.trains.length} trenes, ${timetable.stations.length} estaciones, ${DAYS} días desde ${timetable.base} · ${provinces.features.length} provincias · ${countries.features.length} países`,
 );
