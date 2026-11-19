@@ -15,9 +15,16 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
  * - focus(x, y, k) para centrar un punto (seguir un tren),
  * - fitBounds(bounds) para encuadrar una ruta o una provincia con un vuelo suave.
  * Con «reducir movimiento» activado no hay vuelos: el mapa salta y hace un fundido corto.
+ *
+ * Opciones:
+ *  - `northSlack`: margen extra hacia el norte (para llegar a Lyon con zoom).
+ *  - `wheelNeedsModifier`: la rueda solo hace zoom con Ctrl (o ⌘) pulsado, para que el mapa no «atrape»
+ *    el scroll de la página. Llama a `onWheelBlocked` cuando se intenta sin Ctrl.
  */
-export function useMapZoom(svgRef, height, { northSlack = NORTH_SLACK } = {}) {
+export function useMapZoom(svgRef, height, { northSlack = NORTH_SLACK, wheelNeedsModifier = false, onWheelBlocked } = {}) {
   const zoomRef = useRef(null);
+  const blockedRef = useRef(onWheelBlocked);
+  blockedRef.current = onWheelBlocked;
   const [transform, setTransform] = useState(zoomIdentity);
   const [fading, setFading] = useState(false);
 
@@ -30,10 +37,20 @@ export function useMapZoom(svgRef, height, { northSlack = NORTH_SLACK } = {}) {
         [WIDTH, height],
       ])
       .on('zoom', (event) => setTransform(event.transform));
+    if (wheelNeedsModifier) {
+      behavior.filter((event) => {
+        if (event.type === 'wheel') {
+          const ok = event.ctrlKey || event.metaKey;
+          if (!ok) blockedRef.current?.();
+          return ok;
+        }
+        return !event.button; // mismo comportamiento por defecto para ratón y táctil
+      });
+    }
     svg.call(behavior).on('dblclick.zoom', null);
     zoomRef.current = behavior;
     return () => svg.on('.zoom', null);
-  }, [svgRef, height, northSlack]);
+  }, [svgRef, height, northSlack, wheelNeedsModifier]);
 
   const moveTo = useCallback(
     (target, duration) => {
@@ -70,5 +87,8 @@ export function useMapZoom(svgRef, height, { northSlack = NORTH_SLACK } = {}) {
     [focus, height],
   );
 
-  return { transform, zoomBy, reset, focus, fitBounds, fading };
+  /** Mismo encuadre que fitBounds, con la duración por defecto (nombre que usa el mapa en directo de la portada). */
+  const zoomToBox = useCallback((box, options) => fitBounds(box, { duration: 900, ...options }), [fitBounds]);
+
+  return { transform, zoomBy, reset, focus, fitBounds, zoomToBox, fading };
 }

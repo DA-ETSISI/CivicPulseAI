@@ -7,6 +7,7 @@ import AlertsPanel from '../components/incidents/AlertsPanel.jsx';
 import { STATUSES, useLiveTrains } from '../lib/useLiveTrains.js';
 import { useTrainDetail } from '../lib/useTrainDetail.js';
 import { loadCercaniasTracks, useNetworkData } from '../lib/useNetworkData.js';
+import { normalize } from '../lib/text.js';
 
 const KINDS = [
   { id: 'all', label: 'Todos' },
@@ -14,7 +15,6 @@ const KINDS = [
   { id: 'cer', label: 'Cercanías' },
 ];
 
-const normalize = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 /** «Hace 12 s», actualizado cada segundo. */
 function useAgo(timestamp) {

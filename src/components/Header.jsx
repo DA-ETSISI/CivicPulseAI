@@ -17,7 +17,7 @@ export default function Header({ current, theme, onToggleTheme }) {
   return (
     <header className="header">
       <div className="header-inner">
-        <a className="brand" href="#/mapa" onClick={go('mapa')} aria-label="VíaClara, inicio">
+        <a className="brand" href="#/inicio" onClick={go('inicio')} aria-label="VíaClara, inicio">
           <span className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32" width="28" height="28">
               <rect width="32" height="32" rx="8" fill="currentColor" />

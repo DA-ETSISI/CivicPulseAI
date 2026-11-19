@@ -4,7 +4,7 @@ import TrainList from '../components/tickets/TrainList.jsx';
 import BookingSummary, { legTotal } from '../components/tickets/BookingSummary.jsx';
 import PassengerForm from '../components/tickets/PassengerForm.jsx';
 import Confirmation from '../components/tickets/Confirmation.jsx';
-import { loadTimetable, searchTrains, todayIso } from '../lib/timetable.js';
+import { findStationOption, loadTimetable, searchTrains, todayIso } from '../lib/timetable.js';
 import { scrollToSection } from '../lib/navigation.js';
 
 const STEPS = [
@@ -14,8 +14,11 @@ const STEPS = [
   { id: 'done', label: 'Confirmación' },
 ];
 
-/** Sección «Billetes»: buscar trayecto → elegir tren y tarifa → datos de viajeros → confirmación. */
-export default function TicketsPage() {
+/**
+ * Sección «Billetes»: buscar trayecto → elegir tren y tarifa → datos de viajeros → confirmación.
+ * `trip` ({ from, to, nonce }): trayecto elegido con doble clic en el mapa; rellena el buscador y busca.
+ */
+export default function TicketsPage({ trip }) {
   const [timetable, setTimetable] = useState(null);
   const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState(null);
@@ -23,6 +26,10 @@ export default function TicketsPage() {
   const [outbound, setOutbound] = useState(null);
   const [inbound, setInbound] = useState(null);
   const [booking, setBooking] = useState(null);
+  // Trayecto que llega del mapa y no se ha podido buscar (falta alguna estación): se deja en el formulario.
+  const [draft, setDraft] = useState(null);
+  // Cambia cada vez que el mapa rellena el buscador, para que el formulario se vuelva a montar con esos datos.
+  const [formVersion, setFormVersion] = useState(0);
   const sectionRef = useRef(null);
   const [visible, setVisible] = useState(false);
 
@@ -63,12 +70,39 @@ export default function TicketsPage() {
   };
 
   const search = (form) => {
+    setDraft(null);
     setQuery(form);
     setOutbound(null);
     setInbound(null);
     setBooking(null);
     goTo('outbound');
   };
+
+  // Trayecto elegido en el mapa: rellena origen y destino, busca y baja hasta aquí.
+  useEffect(() => {
+    if (!trip || !timetable) return;
+    const from = findStationOption(timetable, trip.from);
+    const to = findStationOption(timetable, trip.to);
+    const form = { ...initialForm, from, to };
+    setOutbound(null);
+    setInbound(null);
+    setBooking(null);
+    setFormVersion((v) => v + 1);
+    setVisible(true);
+    if (from && to && from.key !== to.key) {
+      setDraft(null);
+      setQuery(form);
+      setStep('outbound');
+    } else {
+      // Sin horarios para alguna de las estaciones: se rellena lo que se pueda y se deja elegir.
+      setQuery(null);
+      setStep('search');
+      setDraft({ form, note: `No hay billetes a la venta para ${trip.from ?? '¿?'} → ${trip.to ?? '¿?'}. Elige las estaciones a mano.` });
+    }
+    requestAnimationFrame(() => scrollToSection('billetes'));
+    // Solo cuando llega un trayecto nuevo desde el mapa.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trip?.nonce, timetable]);
 
   const steps = STEPS.filter((s) => s.id !== 'inbound' || query?.roundTrip);
   const stepIndex = steps.findIndex((s) => s.id === step);
@@ -85,7 +119,18 @@ export default function TicketsPage() {
       {!failed && !timetable && <div className="card placeholder">Cargando horarios…</div>}
 
       {timetable && (
-        <SearchForm key={query ? `${query.dateOut}|${query.dateBack}` : 'new'} timetable={timetable} minDate={minDate} initial={query ?? initialForm} onSearch={search} />
+        <SearchForm
+          key={`${formVersion}|${query ? `${query.dateOut}|${query.dateBack}` : 'new'}`}
+          timetable={timetable}
+          minDate={minDate}
+          initial={query ?? draft?.form ?? initialForm}
+          onSearch={search}
+        />
+      )}
+      {draft && (
+        <p className="form-error trip-note" role="status">
+          {draft.note}
+        </p>
       )}
 
       {timetable && query && step !== 'search' && (
@@ -152,6 +197,7 @@ export default function TicketsPage() {
                   booking={booking}
                   onRestart={() => {
                     setQuery(null);
+                    setDraft(null);
                     setStep('search');
                     requestAnimationFrame(() => scrollToSection('billetes'));
                   }}
