@@ -1,64 +1,131 @@
 import { useMemo, useState } from 'react';
 import LineDetails from './LineDetails.jsx';
+import { IconChevron, IconSearch } from './icons.jsx';
+import { groupByRegion, matchesQuery, splitMatch } from '../lib/regions.js';
+import { splitByService } from '../lib/serviceStatus.js';
 
-const normalize = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const SERVICE_LABEL = { AVE: 'AVE', AVLO: 'AVLO', 'AVE Euromed': 'Euromed' };
 
-/** Panel lateral: buscador + listado de líneas, o el detalle de la seleccionada. */
-export default function LinePanel({ lines, selected, hoveredId, onHover, onSelect }) {
+/** Texto con la parte que coincide con la búsqueda resaltada. */
+function Highlight({ text, query }) {
+  const parts = splitMatch(text, query) ?? [{ text, match: false }];
+  return parts.map((p, i) => (p.match ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>));
+}
+
+/**
+ * Panel lateral de Rutas: buscador y acordeón con una pestaña por comunidad autónoma.
+ * Al escribir se abren solo las comunidades con resultados; si hay una ruta elegida, se ve su ficha.
+ */
+export default function LinePanel({ lines, selected, hoveredId, highlightedStop, onHover, onSelect, onStopPick }) {
   const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(() => new Set());
 
-  const matches = useMemo(() => {
-    const q = normalize(query.trim());
-    return q ? lines.filter((l) => normalize(`${l.name} ${l.stops.join(' ')} ${l.types.join(' ')}`).includes(q)) : lines;
+  const groups = useMemo(() => {
+    const visible = lines.filter((l) => matchesQuery(l, query));
+    return groupByRegion(visible);
   }, [lines, query]);
 
-  if (selected) return <LineDetails line={selected} onClose={() => onSelect(null)} />;
+  const searching = query.trim().length > 0;
+  const isOpen = (name) => (searching ? true : open.has(name));
+  const toggle = (name) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+
+  if (selected) {
+    return <LineDetails line={selected} highlightedStop={highlightedStop} onStopPick={onStopPick} onClose={() => onSelect(null)} />;
+  }
 
   return (
-    <aside className="panel" aria-label="Listado de líneas">
+    <div className="route-panel">
       <label className="search">
-        <span className="visually-hidden">Buscar ciudad o línea</span>
-        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-          <circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-        <input
-          type="search"
-          placeholder="Busca una ciudad o estación"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <span className="visually-hidden">Buscar una ciudad, estación o ruta</span>
+        <IconSearch size={16} />
+        <input type="search" placeholder="Busca una ciudad o estación" value={query} onChange={(e) => setQuery(e.target.value)} />
       </label>
 
       <div className="panel-scroll">
-        {matches.length === 0 && <p className="empty">No hay líneas que coincidan con «{query}».</p>}
-        {matches.length > 0 && (
-          <section className="group">
-            <h3 className="group-title">
-              Líneas de alta velocidad <span>{matches.length}</span>
-            </h3>
-            <ul>
-              {matches.map((l) => (
-                <li key={l.id}>
-                  <button
-                    type="button"
-                    className={`line-item${hoveredId === l.id ? ' is-hover' : ''}`}
-                    onPointerEnter={() => onHover(l.id)}
-                    onPointerLeave={() => onHover(null)}
-                    onFocus={() => onHover(l.id)}
-                    onBlur={() => onHover(null)}
-                    onClick={() => onSelect(l.id)}
-                  >
-                    <span className="swatch" style={{ background: l.color }} />
-                    <span className="line-name">{l.name}</span>
-                    <span className="line-type">{l.types.join(' · ').replace('AVE Euromed', 'Euromed')}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
+        {groups.length === 0 && (
+          <div className="empty-state">
+            <p className="empty-title">Ningún tren pasa por aquí… todavía.</p>
+            <p>
+              No hay rutas de alta velocidad que coincidan con «{query.trim()}». Prueba con otra ciudad o activa más servicios.
+            </p>
+          </div>
         )}
+
+        <ul className="regions">
+          {groups.map((g) => {
+            const expanded = isOpen(g.name);
+            const panelId = `region-${g.name.replace(/\W+/g, '-')}`;
+            return (
+              <li key={g.name} className={`region${expanded ? ' is-open' : ''}`}>
+                <h3>
+                  <button type="button" className="region-head" aria-expanded={expanded} aria-controls={panelId} onClick={() => toggle(g.name)}>
+                    <IconChevron size={16} className="region-chevron" />
+                    <span className="region-name">{g.name}</span>
+                    <span className="region-count">{g.items.length}</span>
+                  </button>
+                </h3>
+                {/* Plegada: `inert` impide que las filas ocultas reciban el ratón o el foco, también mientras se cierra. */}
+                <div className="region-body" id={panelId} role="region" aria-label={g.name} inert={!expanded}>
+                  <ul className="region-lines">
+                    {/* Primero las rutas en servicio ahora; después, bajo un separador, las que no. */}
+                    {(() => {
+                      const { active, inactive } = splitByService(g.items, (it) => it.line.status ?? {});
+                      return [...active, ...(inactive.length ? [{ divider: true }] : []), ...inactive];
+                    })().map((item) =>
+                      item.divider ? (
+                        <li key="divider" className="service-divider" role="presentation">
+                          Sin servicio ahora
+                        </li>
+                      ) : (
+                        <RouteItem key={item.line.id} item={item} query={query} hoveredId={hoveredId} onHover={onHover} onSelect={onSelect} />
+                      ),
+                    )}
+                  </ul>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       </div>
-    </aside>
+    </div>
+  );
+}
+
+/** Fila de una ruta: color, nombre (con la búsqueda resaltada), servicios y estado a esta hora. */
+function RouteItem({ item: { line, stopsHere, isEnd }, query, hoveredId, onHover, onSelect }) {
+  const inactive = line.status?.state === 'inactive';
+  return (
+    <li>
+      <button
+        type="button"
+        className={`route-item${hoveredId === line.id ? ' is-hover' : ''}${inactive ? ' is-inactive' : ''}`}
+        onPointerEnter={() => onHover(line.id)}
+        onPointerLeave={() => onHover(null)}
+        onFocus={() => onHover(line.id)}
+        onBlur={() => onHover(null)}
+        onClick={() => onSelect(line.id)}
+      >
+        <span className="route-dot" style={{ background: line.color }} aria-hidden="true" />
+        <span className="route-text">
+          <span className="route-name">
+            <Highlight text={line.name} query={query} />
+          </span>
+          {!isEnd && <span className="route-via">Para en {stopsHere.join(', ')}</span>}
+          {inactive && <span className="route-via route-status">{line.status.label}</span>}
+        </span>
+        <span className="route-tags">
+          {line.types.map((t) => (
+            <span key={t} className={`service-tag service-tag--${t.split(' ').pop().toLowerCase()}`}>
+              {SERVICE_LABEL[t] ?? t}
+            </span>
+          ))}
+        </span>
+      </button>
+    </li>
   );
 }
