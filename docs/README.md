@@ -27,6 +27,7 @@ Cada fase explica qué se hizo, por qué y dónde está el código.
 | [Fase 6](fases/fase-06-paradas-y-cabeceras.md) | Rutas: etiquetas de paradas, resaltar paradas, cabeceras de línea y corrección del acordeón |
 | [Fase 7](fases/fase-07-remates-y-servicio.md) | Rutas: remates de línea y líneas en servicio según la hora (con `?hora=` para probar) |
 | [Fase 8](fases/fase-08-compensaciones.md) | Incidencias: calculadora de compensaciones por retraso, guía para reclamar y derechos del pasajero |
+| [Fase 9](fases/fase-09-mi-billete.md) | Mi billete (itinerario, transbordos, cuenta atrás, QR con privacidad), mapa de Rutas más grande, aviso rojo y hover de comunidades |
 
 ## Fuentes de datos
 

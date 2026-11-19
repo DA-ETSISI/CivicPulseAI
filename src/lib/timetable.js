@@ -96,7 +96,7 @@ export function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function runsOn(train, day) {
+export function runsOn(train, day) {
   const v = parseInt(train.d[day >> 2], 16);
   return ((v >> (day & 3)) & 1) === 1;
 }

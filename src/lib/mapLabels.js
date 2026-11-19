@@ -7,8 +7,7 @@
  * para que las etiquetas tengan siempre el mismo tamaño en pantalla.
  */
 
-export const LABEL_FONT_PX = 11;
-const LABEL_HEIGHT_PX = 13;
+export const LABEL_FONT_PX = 13;
 const MARKER_PX = 5;
 const GAP_PX = 4;
 
@@ -38,8 +37,11 @@ const RINGS = [1, 2.6, 4.4, 6.5];
  * Coloca una etiqueta por parada sin solapes. `points` son [x, y] en unidades del mapa.
  * Devuelve, para cada parada: { x, y, anchor, leader } (leader = línea guía si la etiqueta se ha alejado).
  * Las cabeceras y la parada resaltada se colocan primero para que tengan la mejor posición.
+ * Opciones: `sizes[i]` = tamaño en px de cada etiqueta (por defecto LABEL_FONT_PX) y `optional` = Set de
+ * índices que, si no caben sin solaparse, se quedan sin etiqueta (null) en vez de montarse sobre otra.
+ * `bounds` = { x0, y0, x1, y1 } visible (unidades del mapa): se evitan posiciones que se saldrían del encuadre.
  */
-export function placeLabels(points, names, k, priority = []) {
+export function placeLabels(points, names, k, priority = [], { sizes = null, optional = null, bounds = null } = {}) {
   const s = 1 / k;
   const order = [...new Set([...priority, ...points.map((_, i) => i)])].filter((i) => points[i]);
   const markers = points.map(([x, y]) => ({ x0: x - MARKER_PX * s, x1: x + MARKER_PX * s, y0: y - MARKER_PX * s, y1: y + MARKER_PX * s }));
@@ -48,8 +50,9 @@ export function placeLabels(points, names, k, priority = []) {
 
   for (const i of order) {
     const [px, py] = points[i];
-    const w = measureLabel(names[i]) * s;
-    const h = LABEL_HEIGHT_PX * s;
+    const fontPx = sizes?.[i] ?? LABEL_FONT_PX;
+    const w = measureLabel(names[i]) * (fontPx / LABEL_FONT_PX) * s;
+    const h = (fontPx + 2) * s;
     let best = null;
 
     for (const ring of RINGS) {
@@ -61,7 +64,8 @@ export function placeLabels(points, names, k, priority = []) {
         const x0 = dx > 0 ? cx : dx < 0 ? cx - w : cx - w / 2;
         const y0 = dy > 0 ? cy : dy < 0 ? cy - h : cy - h / 2;
         const box = { x0: x0 - 1.5 * s, x1: x0 + w + 1.5 * s, y0: y0 - 1 * s, y1: y0 + h + 1 * s };
-        const blocked = placed.some((b) => overlaps(box, b)) || markers.some((m, j) => j !== i && overlaps(box, m));
+        const outside = bounds && (box.x0 < bounds.x0 || box.x1 > bounds.x1 || box.y0 < bounds.y0 || box.y1 > bounds.y1);
+        const blocked = outside || placed.some((b) => overlaps(box, b)) || markers.some((m, j) => j !== i && overlaps(box, m));
         if (!blocked) {
           best = { box, x: x0, y: y0 + h / 2, ring, cx, cy };
           break;
@@ -70,6 +74,10 @@ export function placeLabels(points, names, k, priority = []) {
       if (best) break;
     }
     // Si no hay hueco libre (zonas muy densas), se usa el anillo más lejano con línea guía.
+    if (!best && optional?.has(i)) {
+      result[i] = null;
+      continue;
+    }
     if (!best) {
       const off = (MARKER_PX + GAP_PX) * RINGS.at(-1) * s;
       const x0 = px + off;

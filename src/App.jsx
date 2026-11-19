@@ -3,6 +3,7 @@ import Header from './components/Header.jsx';
 import HomePage from './pages/HomePage.jsx';
 import IncidentsPage from './pages/IncidentsPage.jsx';
 import RoutesPage from './pages/RoutesPage.jsx';
+import MyTicketPage from './pages/MyTicketPage.jsx';
 import { useRoute } from './lib/navigation.js';
 import { useTheme } from './lib/theme.js';
 
@@ -10,6 +11,7 @@ import { useTheme } from './lib/theme.js';
 const PAGES = {
   incidencias: () => <IncidentsPage />,
   rutas: ({ theme }) => <RoutesPage theme={theme} />,
+  'mi-billete': () => <MyTicketPage />,
 };
 
 export default function App() {
