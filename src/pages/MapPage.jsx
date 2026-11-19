@@ -1,17 +1,26 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import RailMap from '../components/RailMap.jsx';
 import CategoryFilter from '../components/CategoryFilter.jsx';
 import LinePanel from '../components/LinePanel.jsx';
+import CercaniasPanel from '../components/CercaniasPanel.jsx';
 import { useNetworkData } from '../lib/useNetworkData.js';
+import { loadCercanias, useProvinceCercanias } from '../lib/useCercanias.js';
 import { CATEGORIES } from '../lib/categories.js';
 import { lineColor } from '../lib/colors.js';
 
-/** Sección «Mapa»: red de alta velocidad con filtros por tipo de tren y listado de líneas. */
+/**
+ * Rutas: mapa de la red de alta velocidad (con filtros por servicio y listado por comunidades)
+ * y, al pulsar una provincia, su red de Cercanías.
+ */
 export default function MapPage({ theme, id = 'mapa' }) {
   const data = useNetworkData();
   const [visible, setVisible] = useState(() => new Set(CATEGORIES.map((c) => c.id)));
   const [hoveredId, setHoveredId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  const [highlightedStop, setHighlightedStop] = useState(null);
+  const [provinceCode, setProvinceCode] = useState(null);
+  const [hoveredCerId, setHoveredCerId] = useState(null);
+  const cercanias = useProvinceCercanias(provinceCode);
 
   // Cada línea tiene su color; en modo oscuro se aclara.
   const lines = useMemo(
@@ -25,35 +34,95 @@ export default function MapPage({ theme, id = 'mapa' }) {
     return c;
   }, [lines]);
   const selected = shown.find((l) => l.id === selectedId) ?? null;
+  const provinceName = data.provinces?.features.find((f) => f.properties.code === provinceCode)?.properties.name;
 
-  const toggle = (id) =>
+  const toggle = (type) =>
     setVisible((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        if (next.size > 1) next.delete(id);
-      } else next.add(id);
+      if (next.has(type)) {
+        if (next.size > 1) next.delete(type);
+      } else next.add(type);
       return next;
     });
 
-  // Pulsar de nuevo la misma línea la deselecciona.
-  const select = useCallback((id) => setSelectedId((cur) => (id && cur === id ? null : id)), []);
+  // Pulsar de nuevo la misma línea la deselecciona. Al cambiar de línea se quita el resalte de parada.
+  const select = useCallback((lineId) => {
+    setSelectedId((cur) => (lineId && cur === lineId ? null : lineId));
+    setHighlightedStop(null);
+  }, []);
+
+  // Pulsar una parada la resalta (y fija su línea si no lo estaba); volver a pulsarla quita el resalte.
+  const pickStop = useCallback(
+    (lineId, index) => {
+      if (lineId !== selectedId) {
+        setSelectedId(lineId);
+        setHighlightedStop(index);
+      } else {
+        setHighlightedStop((cur) => (cur === index ? null : index));
+      }
+    },
+    [selectedId],
+  );
+
+  const enterProvince = useCallback((code) => {
+    setSelectedId(null);
+    setHighlightedStop(null);
+    setHoveredId(null);
+    setHoveredCerId(null);
+    setProvinceCode(code);
+  }, []);
+  const leaveProvince = useCallback(() => {
+    setHoveredCerId(null);
+    setProvinceCode(null);
+  }, []);
+
+  // La red de Cercanías se descarga en segundo plano para que el primer vuelo no espere.
+  useEffect(() => {
+    if (data.status !== 'ready') return undefined;
+    const idle = window.requestIdleCallback ?? ((fn) => setTimeout(fn, 1500));
+    const handle = idle(() => loadCercanias().catch(() => {}));
+    return () => (window.cancelIdleCallback ?? clearTimeout)(handle);
+  }, [data.status]);
+
+  // Escape sale de la provincia o cierra la ficha de la ruta.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (provinceCode) leaveProvince();
+      else if (selectedId) select(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [provinceCode, selectedId, leaveProvince, select]);
 
   return (
-    <section className="page" id={id}>
+    <section className="page routes-page" id={id}>
       <div className="page-head">
         <h1>La alta velocidad en España, de un vistazo</h1>
         <p>
-          Pasa el ratón por encima de una línea para resaltarla o púlsala para ver sus paradas. Acércate con la rueda
-          del ratón o pellizcando la pantalla.
+          Pasa el ratón por una ruta para resaltarla o púlsala para ver sus paradas. Pulsa una provincia para ver su red de
+          Cercanías. Acércate con la rueda del ratón o pellizcando la pantalla.
         </p>
       </div>
 
-      <div className="card map-card">
-        <div className="map-toolbar">
-          <CategoryFilter visible={visible} counts={counts} onToggle={toggle} />
-        </div>
+      <div className="routes-layout">
+        <div className="card map-card">
+          <div className="map-toolbar">
+            {provinceCode ? (
+              <nav className="crumbs" aria-label="Estás en">
+                <button type="button" className="crumb" onClick={leaveProvince}>
+                  Alta velocidad
+                </button>
+                <span aria-hidden="true">/</span>
+                <span className="crumb is-current" aria-current="page">
+                  Cercanías de {provinceName}
+                </span>
+              </nav>
+            ) : (
+              <CategoryFilter visible={visible} counts={counts} onToggle={toggle} />
+            )}
+          </div>
 
-        <div className="map-layout">
           <div className="map-area">
             {data.status === 'loading' && <div className="map-status">Cargando la red ferroviaria…</div>}
             {data.status === 'error' && (
@@ -64,36 +133,58 @@ export default function MapPage({ theme, id = 'mapa' }) {
                 provinces={data.provinces}
                 countries={data.countries}
                 lines={shown}
+                fitLines={lines}
                 hoveredId={hoveredId}
                 selectedId={selected?.id ?? null}
+                highlightedStop={highlightedStop}
                 onHover={setHoveredId}
                 onSelect={select}
+                onStopPick={pickStop}
+                province={provinceCode ? { code: provinceCode, status: cercanias.status, lines: cercanias.lines } : null}
+                hoveredCerId={hoveredCerId}
+                onHoverCer={setHoveredCerId}
+                onProvincePick={enterProvince}
               />
             )}
           </div>
-
-          {data.status === 'ready' && (
-            <LinePanel
-              lines={shown}
-              selected={selected}
-              hoveredId={hoveredId}
-              onHover={setHoveredId}
-              onSelect={select}
-            />
-          )}
         </div>
+
+        {data.status === 'ready' && (
+          <aside className="card side-card" aria-label={provinceCode ? `Cercanías de ${provinceName}` : 'Rutas por comunidad autónoma'}>
+            {provinceCode ? (
+              <CercaniasPanel
+                provinceName={provinceName}
+                state={cercanias}
+                hoveredId={hoveredCerId}
+                onHover={setHoveredCerId}
+                onBack={leaveProvince}
+              />
+            ) : (
+              <LinePanel
+                lines={shown}
+                selected={selected}
+                hoveredId={hoveredId}
+                highlightedStop={highlightedStop}
+                onHover={setHoveredId}
+                onSelect={select}
+                onStopPick={pickStop}
+              />
+            )}
+          </aside>
+        )}
       </div>
 
       {data.status === 'ready' && (
         <p className="track-note">
-          Trazado real de la vía en {lines.filter((l) => l.realTrack).length} de {lines.length} líneas. El resto se dibuja
-          uniendo sus estaciones y se completa solo a medida que circulan los trenes.
+          Trazado real de la vía en <span className="num">{lines.filter((l) => l.realTrack).length}</span> de{' '}
+          <span className="num">{lines.length}</span> rutas. El resto se dibuja uniendo sus estaciones y se completa a medida
+          que circulan los trenes.
         </p>
       )}
 
       {data.status === 'ready' && (
         <footer className="sources">
-          Datos abiertos oficiales:{' '}
+          Datos abiertos:{' '}
           {data.meta.sources.map((s, i) => (
             <span key={s.url}>
               {i > 0 && ' · '}
@@ -102,6 +193,10 @@ export default function MapPage({ theme, id = 'mapa' }) {
               </a>
             </span>
           ))}
+          {' · '}
+          <a href="https://data.renfe.com/dataset/horarios-cercanias" target="_blank" rel="noreferrer">
+            Renfe Data · GTFS Cercanías y Rodalies
+          </a>
           . Actualizado el {new Date(data.meta.generatedAt).toLocaleDateString('es-ES')}.
         </footer>
       )}
