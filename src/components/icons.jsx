@@ -56,3 +56,11 @@ export const IconSearch = (p) => (
     <path d="m12.75 12.75 3.75 3.75" />
   </Icon>
 );
+
+/** Aviso: triángulo con exclamación. */
+export const IconAlert = (p) => (
+  <Icon {...p}>
+    <path d="M10 3.2 17.4 16a.9.9 0 0 1-.8 1.3H3.4a.9.9 0 0 1-.8-1.3L10 3.2Z" />
+    <path d="M10 8.2v3.6M10 14.4v.1" />
+  </Icon>
+);

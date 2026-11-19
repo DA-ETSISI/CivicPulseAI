@@ -1,4 +1,4 @@
-# Fase 9 · Huella de carbono: ahorro de CO₂ frente al coche (Billetes)
+# Fase 10 · Huella de carbono: ahorro de CO₂ frente al coche (Billetes)
 
 Rama `ecofriendly`. Al elegir un billete, el **resumen de compra** muestra, debajo del precio, cuántos kilos de
 CO₂ ahorras haciendo ese trayecto en tren en lugar de en coche particular.

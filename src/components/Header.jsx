@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import ThemeToggle from './ThemeToggle.jsx';
 import { navigate } from '../lib/navigation.js';
 
@@ -6,9 +7,39 @@ const LINKS = [
   { id: 'billetes', label: 'Billetes' },
   { id: 'incidencias', label: 'Incidencias' },
   { id: 'rutas', label: 'Rutas' },
+  { id: 'mi-billete', label: 'Mi billete' },
 ];
 
+/**
+ * Subrayado único que se desliza hasta la pestaña activa (translateX + width).
+ * La primera vez se coloca sin animación; luego, al cambiar de pestaña o de tamaño, se anima.
+ */
+function useNavIndicator(navRef, current) {
+  const [box, setBox] = useState(null);
+  const ready = useRef(false);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return undefined;
+    const measure = () => {
+      const link = nav.querySelector('.nav-link.is-active');
+      setBox(link ? { x: link.offsetLeft + 12, w: link.offsetWidth - 24, top: link.offsetTop + link.offsetHeight - 4 } : null);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(nav);
+    nav.querySelectorAll('.nav-link').forEach((l) => ro.observe(l));
+    const id = requestAnimationFrame(() => (ready.current = true));
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(id);
+    };
+  }, [navRef, current]);
+  return { box, animate: ready.current };
+}
+
 export default function Header({ current, theme, onToggleTheme }) {
+  const navRef = useRef(null);
+  const indicator = useNavIndicator(navRef, current);
   const go = (id) => (event) => {
     event.preventDefault();
     navigate(id);
@@ -29,7 +60,7 @@ export default function Header({ current, theme, onToggleTheme }) {
           <span className="brand-name">VíaClara</span>
         </a>
 
-        <nav className="nav" aria-label="Principal">
+        <nav className="nav" aria-label="Principal" ref={navRef}>
           {LINKS.map((link) => (
             <a
               key={link.id}
@@ -41,6 +72,11 @@ export default function Header({ current, theme, onToggleTheme }) {
               {link.label}
             </a>
           ))}
+          <span
+            className={`nav-indicator${indicator.animate ? ' is-animated' : ''}`}
+            aria-hidden="true"
+            style={indicator.box ? { top: indicator.box.top, width: indicator.box.w, transform: `translateX(${indicator.box.x}px)` } : { opacity: 0 }}
+          />
         </nav>
 
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
