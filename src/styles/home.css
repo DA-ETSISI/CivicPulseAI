@@ -1,0 +1,293 @@
+/* ==========================================================================
+   Portada (hero) + mapa de trenes en directo
+   Archivo aparte para no chocar con index.css al trabajar en paralelo.
+   ========================================================================== */
+
+:root {
+  /* Colores por tipo de servicio */
+  --svc-larga: #c23b4e;
+  --svc-media: #cf8a12;
+  --svc-corta: #3d74c4;
+  --focus-fill: color-mix(in srgb, var(--accent) 16%, var(--land));
+}
+:root[data-theme='dark'] {
+  --svc-larga: #f07a8a;
+  --svc-media: #f0b54a;
+  --svc-corta: #82a8ec;
+  --focus-fill: color-mix(in srgb, var(--accent) 22%, var(--land));
+}
+
+.app { overflow-x: clip; }
+
+/* ---------- Portada ---------- */
+.hero {
+  position: relative;
+  isolation: isolate;
+  /* Ocupa todo el ancho de la ventana aunque esté dentro de .main */
+  margin: -28px calc(50% - 50vw) 0;
+  min-height: max(520px, calc(100svh - 64px));
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: #fff;
+  background: #1d2430;
+}
+.hero-img {
+  position: absolute; inset: 0; z-index: -2;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  /* El tren está algo por debajo de la mitad de la foto: así siempre se ve. */
+  object-position: 50% 58%;
+  animation: hero-zoom 18s ease-out both;
+}
+.hero-shade {
+  position: absolute; inset: 0; z-index: -1;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 38%, rgb(10 14 22 / 0.45), transparent 75%),
+    linear-gradient(to bottom, rgb(10 14 22 / 0.35), transparent 35%, transparent 70%, rgb(10 14 22 / 0.55));
+}
+.hero-content {
+  display: grid; justify-items: center; gap: 14px;
+  text-align: center;
+  padding: 0 16px;
+  /* Un poco por encima del centro, para no tapar el tren */
+  transform: translateY(-9vh);
+  animation: hero-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.hero-live {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 7px 14px; border-radius: 999px;
+  font-size: 0.85rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  background: rgb(255 255 255 / 0.14);
+  border: 1px solid rgb(255 255 255 / 0.25);
+  backdrop-filter: blur(8px);
+}
+.hero-live .live-pulse { background: #7be0bf; }
+.hero-title {
+  font-size: clamp(3.2rem, 11vw, 8rem);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 0.95;
+  text-shadow: 0 4px 30px rgb(0 0 0 / 0.35);
+}
+.hero-sub {
+  max-width: 34ch;
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  line-height: 1.45;
+  color: rgb(255 255 255 / 0.9);
+  text-shadow: 0 2px 14px rgb(0 0 0 / 0.4);
+}
+.hero-cta {
+  margin-top: 10px;
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 13px 22px; border-radius: 999px; border: 0; cursor: pointer;
+  background: #fff; color: #1c2430;
+  font-weight: 600; font-size: 1rem;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.25);
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+.hero-cta:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgb(0 0 0 / 0.3); }
+.hero-cta:active { transform: scale(0.97); }
+.hero-cta:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+.hero-cta svg { animation: hero-bounce 2s ease-in-out infinite; }
+.hero-credit {
+  position: absolute; right: 16px; bottom: 12px;
+  font-size: 0.72rem; color: rgb(255 255 255 / 0.75);
+}
+.hero-credit a { color: inherit; }
+
+@keyframes hero-zoom { from { transform: scale(1.08); } to { transform: scale(1); } }
+@keyframes hero-in { from { opacity: 0; transform: translateY(calc(-9vh + 24px)); } }
+@keyframes hero-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+
+/* ---------- Sección del mapa en directo ---------- */
+.live-section { padding-top: 40px; }
+.live-head .eyebrow { display: inline-flex; align-items: center; gap: 8px; }
+.live-ago { text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+.live-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+.live-map-card { position: relative; overflow: hidden; background: var(--sea); }
+.live-map-card .map-status { min-height: 560px; }
+/* El mapa nunca es más alto que la ventana: así la leyenda y la ficha siempre se ven. */
+.live-map .map-svg { max-height: calc(100svh - 100px); overflow: visible; }
+
+/* Puntos de los trenes: se deslizan a su nueva posición en cada actualización */
+.live-dot-pos { transition: transform 2.5s cubic-bezier(0.4, 0, 0.2, 1); }
+.live-dot { stroke: var(--casing); cursor: pointer; }
+.live-dot--larga { fill: var(--svc-larga); }
+.live-dot--media { fill: var(--svc-media); }
+.live-dot--corta { fill: var(--svc-corta); }
+.live-dot:hover { stroke: var(--ink); }
+.live-dot.is-selected { stroke: var(--ink); }
+.live-dot-halo { fill: none; stroke: var(--ink); opacity: 0.35; pointer-events: none; }
+
+.province-focus { fill: var(--focus-fill); stroke: var(--accent); stroke-width: 1.6px; vector-effect: non-scaling-stroke; }
+.city-ring { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke: var(--accent); stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.city-pin { fill: var(--accent); }
+
+.svc-dot { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 50%; }
+.svc-dot--larga { background: var(--svc-larga); }
+.svc-dot--media { background: var(--svc-media); }
+.svc-dot--corta { background: var(--svc-corta); }
+
+.wheel-hint {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  background: rgb(10 14 22 / 0.35); color: #fff; font-weight: 600;
+  opacity: 0; transition: opacity 0.25s ease;
+}
+.wheel-hint.is-visible { opacity: 1; }
+.wheel-hint kbd {
+  display: inline-block; margin: 0 4px; padding: 2px 8px; border-radius: 6px;
+  background: rgb(255 255 255 / 0.2); border: 1px solid rgb(255 255 255 / 0.4); font: inherit;
+}
+
+.map-empty-note {
+  position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+  padding: 8px 14px; border-radius: 999px; font-size: 0.85rem;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); color: var(--ink-2);
+}
+
+/* Ficha del tren seleccionado */
+.train-card {
+  position: absolute; right: 12px; top: 12px; z-index: 4;
+  width: min(320px, calc(100% - 24px));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-pop);
+  padding: 14px 16px;
+  animation: card-in 0.25s ease both;
+}
+.train-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.train-card-head .svc-dot { margin-top: 6px; }
+.train-card-head > div { flex: 1; min-width: 0; }
+.train-card-title { font-weight: 700; font-size: 1rem; }
+.train-card-sub { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+.train-card-close {
+  flex: none; width: 28px; height: 28px; border-radius: 8px; border: 0; cursor: pointer;
+  background: var(--surface-2); color: var(--ink-2); font-size: 1.1rem; line-height: 1;
+}
+.train-card-close:hover { color: var(--ink); }
+.train-card-list { margin: 12px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 0.85rem; }
+.train-card-list dt { color: var(--muted); }
+.train-card-list dd { margin: 0; color: var(--ink); line-height: 1.4; }
+.train-card-list dd .status-dot { width: 8px; height: 8px; margin-right: 4px; vertical-align: 1px; }
+.train-card-list dd.is-late { color: var(--st-delay); font-weight: 600; }
+@keyframes card-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* ---------- Panel de filtros ---------- */
+.live-panel { position: sticky; top: 80px; padding: 16px; display: grid; gap: 18px; }
+.live-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.live-panel-count { font-size: 0.9rem; color: var(--ink-2); }
+.live-panel-count strong { font-size: 1.5rem; color: var(--ink); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-right: 2px; }
+.link-button { border: 0; background: none; padding: 0; cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.85rem; }
+.link-button:disabled { color: var(--muted); opacity: 0.6; cursor: default; }
+
+.filter-group { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 10px; }
+.filter-group legend {
+  padding: 0; margin-bottom: 10px;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+.filter-hint { font-size: 0.75rem; color: var(--muted); line-height: 1.45; }
+
+.service-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.service-btn, .network-btn, .quick-place {
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+  border-radius: 10px; cursor: pointer; text-align: left;
+  transition: border-color 0.15s, background-color 0.15s, color 0.15s, transform 0.1s;
+}
+.service-btn:hover, .network-btn:hover:not(:disabled), .quick-place:hover { border-color: var(--border-strong); color: var(--ink); }
+.service-btn:active, .network-btn:active:not(:disabled), .quick-place:active { transform: scale(0.97); }
+.service-btn:focus-visible, .network-btn:focus-visible, .quick-place:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.service-btn.is-active, .network-btn.is-active {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--ink);
+}
+.service-btn { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 9px 10px; font-size: 0.88rem; font-weight: 600; }
+.service-btn-label { display: inline-flex; align-items: center; gap: 7px; }
+.service-btn-count { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.network-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.network-btn { display: grid; gap: 1px; padding: 8px 10px; }
+.network-btn:disabled { opacity: 0.45; cursor: default; }
+.network-btn-name { font-size: 0.88rem; font-weight: 600; }
+.network-btn-meta { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Buscador de provincia o ciudad */
+.place-search { position: relative; }
+.place-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.place-search-input {
+  width: 100%; padding: 10px 12px 10px 36px; font-size: 0.9rem;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--ink); outline: 0;
+}
+.place-search-input:focus { border-color: var(--accent); background: var(--surface); }
+.place-results, .place-empty {
+  position: absolute; z-index: 10; left: 0; right: 0; top: calc(100% + 6px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-pop);
+}
+.place-results { list-style: none; margin: 0; padding: 4px; max-height: 300px; overflow-y: auto; }
+.place-results li {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+}
+.place-results li.is-active { background: var(--surface-2); }
+.place-empty { padding: 10px 12px; font-size: 0.85rem; color: var(--muted); }
+.place-kind { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+.quick-places { display: flex; flex-wrap: wrap; gap: 6px; }
+.quick-place { padding: 5px 11px; border-radius: 999px; font-size: 0.82rem; font-weight: 500; }
+
+.place-chip {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 8px 7px 12px; border-radius: 10px;
+  background: var(--accent-soft); border: 1px solid var(--accent); font-weight: 600; font-size: 0.9rem;
+}
+.place-chip .place-kind { margin-right: 4px; }
+.place-chip button {
+  width: 26px; height: 26px; border-radius: 7px; border: 0; cursor: pointer;
+  background: transparent; color: var(--ink-2); font-size: 1.1rem; line-height: 1;
+}
+.place-chip button:hover { background: var(--surface); color: var(--ink); }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1100px) {
+  .live-layout { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+@media (max-width: 900px) {
+  .live-layout { grid-template-columns: minmax(0, 1fr); }
+  .live-panel { position: static; }
+  .network-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .service-buttons { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .service-btn { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 720px) {
+  .hero { margin-top: -20px; min-height: max(460px, calc(100svh - 96px)); }
+  .live-section { padding-top: 40px; }
+  .live-map-card .map-status { min-height: 320px; }
+  .live-map .map-legend { display: none; }
+  .train-card { left: 56px; width: calc(100% - 68px); }
+}
+@media (max-width: 560px) {
+  .service-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .network-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero-credit { right: 50%; transform: translateX(50%); white-space: nowrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-img, .hero-content { animation: none; }
+  .live-dot-pos { transition: none; }
+}
+
+/* ---------- Líneas del mapa: clic para ver, doble clic para comprar billete ---------- */
+.live-tracks--interactive .live-track-hit {
+  fill: none; stroke: transparent; stroke-width: 14px; vector-effect: non-scaling-stroke;
+  pointer-events: stroke; cursor: pointer;
+}
+.live-tracks--interactive .live-track-line { pointer-events: none; transition: stroke 0.15s, stroke-width 0.15s; }
+.live-tracks--interactive .live-track.is-active .live-track-line { stroke: var(--accent); stroke-width: 3.5px; opacity: 1; }
+
+.tooltip-hint { margin-top: 4px; font-size: 0.72rem; font-weight: 600; color: var(--accent); }
+.line-swatch { flex: none; width: 14px; height: 4px; margin-top: 9px; border-radius: 2px; background: var(--accent); }
+.card-book { margin-top: 14px; width: 100%; justify-content: center; gap: 8px; display: inline-flex; align-items: center; }
+.trip-note { margin-top: 10px; }

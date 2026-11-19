@@ -6,7 +6,7 @@ import RoutesPage from './pages/RoutesPage.jsx';
 import { useRoute } from './lib/navigation.js';
 import { useTheme } from './lib/theme.js';
 
-/** Secciones que son páginas propias; «mapa» y «billetes» viven juntas en la página principal. */
+/** Secciones que son páginas propias; «inicio», «mapa» y «billetes» viven juntas en la página principal. */
 const PAGES = {
   incidencias: () => <IncidentsPage />,
   rutas: ({ theme }) => <RoutesPage theme={theme} />,
@@ -15,7 +15,7 @@ const PAGES = {
 export default function App() {
   const { route, nonce } = useRoute();
   const [theme, toggleTheme] = useTheme();
-  const [section, setSection] = useState('mapa');
+  const [section, setSection] = useState('inicio');
 
   const Page = PAGES[route];
   const current = Page ? route : section;

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import LineDetails from './LineDetails.jsx';
+import { normalize } from '../lib/text.js';
 
-const normalize = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 /** Panel lateral: buscador + listado de líneas, o el detalle de la seleccionada. */
 export default function LinePanel({ lines, selected, hoveredId, onHover, onSelect }) {

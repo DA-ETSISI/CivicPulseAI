@@ -21,6 +21,7 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { geoBounds, geoContains } from 'd3-geo';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const POLL_MS = 20_000;
@@ -56,6 +57,45 @@ const reference = JSON.parse(
   await readFile(path.join(import.meta.dirname, 'data', 'reference.json'), 'utf8').catch(() => '{"stops":{},"trains":{}}'),
 );
 
+// ---------- Clasificación de cada tren (para los filtros del mapa) ----------
+
+/** Tipo de servicio según el producto de Renfe. */
+const SERVICE_BY_TYPE = {
+  AVE: 'larga', AVLO: 'larga', 'AVE Euromed': 'larga', Euromed: 'larga', Alvia: 'larga', Intercity: 'larga',
+  AVANT: 'media', 'AVANT EXP': 'media', Regional: 'media', 'Regional Exprés': 'media', 'Larga distancia': 'larga',
+  Cercanías: 'corta',
+};
+
+/** Núcleos de Cercanías agrupados como los conoce la gente (Bilbao + San Sebastián = Euskadi…). */
+const NETWORK_BY_NUCLEO = {
+  Madrid: 'madrid', 'Rodalies de Catalunya': 'barcelona', Valencia: 'valencia', Bilbao: 'euskadi',
+  'San Sebastián': 'euskadi', Asturias: 'asturias', Sevilla: 'sevilla', Cádiz: 'cadiz', Málaga: 'malaga',
+  'Murcia/Alicante': 'murcia', Cartagena: 'murcia', Santander: 'cantabria', Zaragoza: 'zaragoza', León: 'leon',
+  Ferrol: 'ferrol',
+};
+
+/** Provincias (las mismas que dibuja el mapa) con su caja para descartar rápido. */
+const provinces = await readFile(path.join(import.meta.dirname, '..', 'public', 'data', 'provinces.json'), 'utf8')
+  .then((txt) =>
+    JSON.parse(txt).features.map((f) => ({ code: f.properties.code, name: f.properties.name, feature: f, box: geoBounds(f) })),
+  )
+  .catch(() => []);
+
+/** ¿Es una posición GPS creíble para un tren de Renfe? (España, Canarias y el sur de Francia) */
+function validPosition({ lat, lon }) {
+  return Number.isFinite(lat) && Number.isFinite(lon) && lat > 26 && lat < 46 && lon > -19.5 && lon < 6;
+}
+
+/** Provincia en la que está un punto GPS (o null si está fuera de España, p. ej. en Francia). */
+function provinceOf({ lat, lon }) {
+  for (const p of provinces) {
+    const [[x0, y0], [x1, y1]] = p.box;
+    if (lon < x0 || lon > x1 || lat < y0 || lat > y1) continue;
+    if (geoContains(p.feature, [lon, lat])) return { code: p.code, name: p.name };
+  }
+  return null;
+}
+
 /** Estado interno por tren: última posición y desde cuándo no se mueve. */
 const vehicles = new Map();
 /** Datos oficiales: retraso por viaje (tripId → segundos), viajes cancelados y avisos. */
@@ -81,11 +121,30 @@ function describe(kind, v) {
   if (kind === 'ld') {
     const number = tripId.slice(0, 5);
     const info = reference.trains[number];
-    return { number, label: `${info?.type ?? 'Tren'} ${number}`, type: info?.type ?? 'Larga distancia', origin: info?.from ?? null, destination: info?.to ?? null };
+    const type = info?.type ?? 'Larga distancia';
+    return {
+      number,
+      label: `${info?.type ?? 'Tren'} ${number}`,
+      type,
+      service: SERVICE_BY_TYPE[type] ?? 'media',
+      network: null,
+      origin: info?.from ?? null,
+      destination: info?.to ?? null,
+    };
   }
   const line = label.split('-')[0];
   const nucleo = NUCLEOS[tripId.slice(0, 2)] ?? 'Cercanías';
-  return { number: v.vehicle?.id ?? '', label: `${line} · ${nucleo}`, type: 'Cercanías', line, nucleo, origin: null, destination: null };
+  return {
+    number: v.vehicle?.id ?? '',
+    label: `${line} · ${nucleo}`,
+    type: 'Cercanías',
+    service: 'corta',
+    network: NETWORK_BY_NUCLEO[nucleo] ?? 'otros',
+    line,
+    nucleo,
+    origin: null,
+    destination: null,
+  };
 }
 
 async function pollFeed(feed) {
@@ -108,7 +167,9 @@ async function pollFeed(feed) {
       const v = entity.vehicle;
       if (!v?.position) continue;
       const key = `${feed.kind}:${entity.id}`;
-      const pos = { lat: v.position.latitude, lon: v.position.longitude };
+      const pos = { lat: Number(v.position.latitude), lon: Number(v.position.longitude) };
+      // Se descartan posiciones vacías o imposibles (p. ej. 0,0 cuando el GPS no tiene señal).
+      if (!validPosition(pos)) continue;
       const raw = v.currentStatus ?? 'IN_TRANSIT_TO';
       const prev = vehicles.get(key);
 
@@ -124,6 +185,8 @@ async function pollFeed(feed) {
         pos,
         raw,
         stillSince,
+        // La provincia solo se recalcula si el tren se ha desplazado.
+        province: moved || prev.province === undefined ? provinceOf(pos) : prev.province,
         lastSeen: now,
         stopId: v.stopId ?? null,
         info: describe(feed.kind, v),
@@ -201,10 +264,18 @@ async function pollOfficial() {
   }
 }
 
+/** Evita que se solapen dos lecturas si las fuentes de Renfe tardan más que el intervalo. */
+let polling = false;
 async function pollAll() {
-  await Promise.all([...FEEDS.map(pollFeed), pollOfficial()]);
-  const now = Date.now();
-  for (const [key, v] of vehicles) if (now - v.lastSeen > FORGET_MS) vehicles.delete(key);
+  if (polling) return;
+  polling = true;
+  try {
+    await Promise.all([...FEEDS.map(pollFeed), pollOfficial()]);
+    const now = Date.now();
+    for (const [key, v] of vehicles) if (now - v.lastSeen > FORGET_MS) vehicles.delete(key);
+  } finally {
+    polling = false;
+  }
 }
 
 function snapshot() {
@@ -225,6 +296,8 @@ function snapshot() {
       ...v.info,
       lat: v.pos.lat,
       lon: v.pos.lon,
+      province: v.province?.code ?? null,
+      provinceName: v.province?.name ?? null,
       rawStatus: v.raw,
       status,
       stopId: v.stopId,
@@ -262,6 +335,42 @@ function snapshot() {
   };
 }
 
+/**
+ * Versión ligera para el mapa en directo de la portada: solo lo necesario para dibujar
+ * y filtrar cada tren, más los recuentos de cada filtro (servicio, red de Cercanías, provincia).
+ */
+function liveMap() {
+  const full = snapshot();
+  const facets = { service: {}, network: {}, province: {} };
+  const bump = (group, key) => key && (facets[group][key] = (facets[group][key] ?? 0) + 1);
+
+  const trains = full.trains.map((t) => {
+    bump('service', t.service);
+    bump('network', t.network);
+    bump('province', t.province);
+    return {
+      id: t.id,
+      label: t.label,
+      type: t.type,
+      service: t.service,
+      network: t.network,
+      line: t.line ?? null,
+      province: t.province,
+      provinceName: t.provinceName,
+      lat: t.lat,
+      lon: t.lon,
+      status: t.status,
+      origin: t.origin,
+      destination: t.destination,
+      stopName: t.stopName,
+      officialDelayMin: t.officialDelayMin,
+    };
+  });
+
+  const feedsOk = full.feeds.some((f) => f.ok);
+  return { generatedAt: full.generatedAt, pollSeconds: full.pollSeconds, feedsOk, total: trains.length, facets, trains };
+}
+
 // ---------- HTTP ----------
 
 const server = http.createServer((req, res) => {
@@ -276,12 +385,15 @@ const server = http.createServer((req, res) => {
   };
 
   if (req.method === 'GET' && url.pathname === '/api/incidencias') return send(200, snapshot());
+  if (req.method === 'GET' && url.pathname === '/api/trenes') return send(200, liveMap());
   if (req.method === 'GET' && url.pathname === '/api/health') return send(200, { ok: true, feeds: Object.values(feedState) });
   send(404, { error: 'No encontrado' });
 });
 
-await pollAll();
-setInterval(pollAll, POLL_MS);
+// El servidor responde desde el primer momento (con 0 trenes) y se va llenando en cuanto llegan los datos.
 server.listen(PORT, () => {
-  console.log(`🚆 Incidencias en tiempo real en http://localhost:${PORT}/api/incidencias (${vehicles.size} trenes)`);
+  console.log(`🚆 Servidor de trenes en tiempo real en http://localhost:${PORT}/api/trenes`);
 });
+await pollAll();
+console.log(`   Primera lectura: ${vehicles.size} trenes`);
+setInterval(pollAll, POLL_MS);

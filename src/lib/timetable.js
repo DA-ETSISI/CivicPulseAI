@@ -3,6 +3,8 @@
  * Los horarios son reales; los precios son ORIENTATIVOS (Renfe no los publica en abierto).
  */
 
+import { normalize } from './text.js';
+
 let cache = null;
 export function loadTimetable() {
   cache ??= fetch('/data/timetable.json')
@@ -15,7 +17,6 @@ export function loadTimetable() {
   return cache;
 }
 
-const normalize = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 /** Prepara las opciones del buscador: cada estación y, si una ciudad tiene varias, "Ciudad (todas)". */
 function prepare(tt) {
@@ -45,6 +46,27 @@ function prepare(tt) {
 
   const maxDate = addDays(tt.base, tt.days - 1);
   return { ...tt, options, maxDate };
+}
+
+/**
+ * Convierte un nombre de estación del mapa (p. ej. «Sevilla-Santa Justa») en una opción del buscador.
+ * Si la ciudad tiene varias estaciones se elige «Ciudad (todas)» para encontrar más trenes.
+ */
+export function findStationOption(tt, name) {
+  if (!name) return null;
+  const q = normalize(name).trim();
+  if (!q) return null;
+  // 1) nombre exacto · 2) nombre que empieza igual · 3) misma ciudad («Sevilla-Santa Justa» → Sevilla).
+  const station =
+    tt.stations.find((s) => normalize(s.name) === q) ??
+    tt.stations.find((s) => normalize(s.name).startsWith(q)) ??
+    tt.stations.find((s) => s.city && q.startsWith(normalize(s.city)));
+  if (!station) return null;
+  return (
+    tt.options.find((o) => o.key === `city:${station.city}`) ??
+    tt.options.find((o) => o.ids.length === 1 && tt.stations[o.ids[0]] === station) ??
+    null
+  );
 }
 
 export function filterOptions(options, text, limit = 8) {

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
+import { normalize } from '../../lib/text.js';
 
 const PAGE = 8;
-const normalize = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 const fmt = (iso) =>
   new Date(iso).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });

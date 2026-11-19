@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const readRoute = () => window.location.hash.replace(/^#\/?/, '') || 'mapa';
+const readRoute = () => window.location.hash.replace(/^#\/?/, '') || 'inicio';
 
 /** Cambia de sección. Funciona aunque se pulse dos veces la misma opción del menú. */
 export function navigate(id) {
@@ -9,7 +9,7 @@ export function navigate(id) {
   window.dispatchEvent(new Event('app:navigate'));
 }
 
-/** Ruta actual (#/mapa, #/billetes, #/incidencias, #/rutas) + un contador que cambia en cada navegación. */
+/** Ruta actual (#/inicio, #/mapa, #/billetes, #/incidencias, #/rutas) + un contador que cambia en cada navegación. */
 export function useRoute() {
   const [state, setState] = useState(() => ({ route: readRoute(), nonce: 0 }));
 
@@ -54,10 +54,13 @@ export function animateScrollTo(y) {
   frame = requestAnimationFrame(step);
 }
 
-/** Baja (o sube) hasta la sección con ese id, dejando sitio para la cabecera fija. */
-export function scrollToSection(id) {
+/**
+ * Baja (o sube) hasta la sección con ese id, dejando sitio para la cabecera fija.
+ * `gap`: espacio extra por encima de la sección (0 = pegada a la cabecera).
+ */
+export function scrollToSection(id, gap = 16) {
   const el = document.getElementById(id);
   if (!el) return;
   const header = document.querySelector('.header')?.offsetHeight ?? 64;
-  animateScrollTo(Math.max(0, el.getBoundingClientRect().top + window.scrollY - header - 16));
+  animateScrollTo(Math.max(0, el.getBoundingClientRect().top + window.scrollY - header - gap));
 }
