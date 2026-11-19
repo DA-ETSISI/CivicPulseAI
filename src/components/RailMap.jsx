@@ -1,48 +1,88 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { geoPath } from 'd3-geo';
-import { geoConicConformalSpain } from 'd3-composite-projections';
+import { geoConicConformal, geoMercator, geoPath } from 'd3-geo';
 import { zoom as d3zoom, zoomIdentity } from 'd3-zoom';
 import { select } from 'd3-selection';
-import { CATEGORY_BY_ID } from '../lib/categories.js';
 
 const WIDTH = 1000;
-const HEIGHT = 760;
-const MAX_ZOOM = 14;
+const PAD = 18;
+const MAX_ZOOM = 12;
+const CANARY = new Set(['35', '38']);
+/** Punto extra para que el encuadre incluya el sur de Francia (la línea a Lyon sigue al hacer zoom). */
+const NORTH_EAST = [4.4, 44.25];
+/** Margen extra (en px del mapa) para poder desplazarse hacia el norte hasta Lyon con zoom. */
+const NORTH_SLACK = 260;
+const COUNTRY_LABELS = [
+  { name: 'Portugal', at: [-8.05, 39.75] },
+  { name: 'Francia', at: [1.6, 43.85] },
+];
 
-/** Mapa SVG de España con provincias y líneas ferroviarias. Zoom con rueda/pellizco. */
-export default function RailMap({ provinces, lines, hoveredId, selectedId, onHover, onSelect }) {
+/** Construye las proyecciones: península + países vecinos, y Canarias en un recuadro aparte. */
+function buildGeometry(provinces, countries) {
+  const mainland = provinces.features.filter((f) => !CANARY.has(f.properties.code));
+  const canary = { type: 'FeatureCollection', features: provinces.features.filter((f) => CANARY.has(f.properties.code)) };
+  const portugal = countries.features.filter((f) => f.properties.name === 'Portugal');
+  const target = {
+    type: 'FeatureCollection',
+    features: [...mainland, ...portugal, { type: 'Feature', geometry: { type: 'Point', coordinates: NORTH_EAST } }],
+  };
+
+  const projection = geoConicConformal().parallels([37, 44]).rotate([3, 0]).fitWidth(WIDTH - 2 * PAD, target);
+  const [[x0, y0], [, y1]] = geoPath(projection).bounds(target);
+  const [tx, ty] = projection.translate();
+  projection.translate([tx + PAD - x0, ty + PAD - y0]);
+  const height = Math.round(y1 - y0 + 2 * PAD);
+
+  const inset = { x: PAD, y: height - PAD - 92, w: 200, h: 92 };
+  const insetProjection = geoMercator().fitExtent(
+    [
+      [inset.x + 10, inset.y + 16],
+      [inset.x + inset.w - 10, inset.y + inset.h - 8],
+    ],
+    canary,
+  );
+
+  return { projection, path: geoPath(projection), insetPath: geoPath(insetProjection), height, inset, canary };
+}
+
+/** Mapa SVG de España con provincias, países vecinos y líneas de alta velocidad. */
+export default function RailMap({ provinces, countries, lines, hoveredId, selectedId, onHover, onSelect }) {
   const svgRef = useRef(null);
   const zoomRef = useRef(null);
   const [transform, setTransform] = useState(zoomIdentity);
   const [pointer, setPointer] = useState(null);
 
-  const { provinceShapes, lineShapes, frame } = useMemo(() => {
-    const projection = geoConicConformalSpain().fitExtent(
-      [
-        [16, 16],
-        [WIDTH - 16, HEIGHT - 16],
-      ],
-      provinces,
-    );
-    const path = geoPath(projection);
+  const geo = useMemo(() => buildGeometry(provinces, countries), [provinces, countries]);
+  const { height } = geo;
+
+  const base = useMemo(() => {
     const provinceShapes = provinces.features.map((f) => {
-      const [x, y] = path.centroid(f);
-      const area = path.area(f);
+      const p = CANARY.has(f.properties.code) ? geo.insetPath : geo.path;
+      const [x, y] = p.centroid(f);
       return {
         name: f.properties.name,
-        d: path(f),
+        d: p(f),
         x,
         y,
-        size: Math.max(7.5, Math.min(11, Math.sqrt(area) / 9)),
+        size: Math.max(7.5, Math.min(11, Math.sqrt(p.area(f)) / 9)),
       };
     });
-    const lineShapes = lines.map((line) => ({
-      line,
-      d: path({ type: 'MultiLineString', coordinates: line.coords }),
-      stops: line.category === 'cer' ? [] : line.coords[0].map((c) => projection(c)).filter(Boolean),
-    }));
-    return { provinceShapes, lineShapes, frame: projection.getCompositionBorders() };
-  }, [provinces, lines]);
+    const countryShapes = countries.features.map((f) => ({ name: f.properties.name, d: geo.path(f) }));
+    const countryLabels = COUNTRY_LABELS.map((c) => {
+      const [x, y] = geo.projection(c.at);
+      return { ...c, x, y };
+    });
+    return { provinceShapes, countryShapes, countryLabels };
+  }, [provinces, countries, geo]);
+
+  const lineShapes = useMemo(
+    () =>
+      lines.map((line) => ({
+        line,
+        d: geo.path({ type: 'MultiLineString', coordinates: line.coords }),
+        stops: line.coords[0].map((c) => geo.projection(c)),
+      })),
+    [lines, geo],
+  );
 
   // Zoom y desplazamiento
   useEffect(() => {
@@ -50,14 +90,14 @@ export default function RailMap({ provinces, lines, hoveredId, selectedId, onHov
     const behavior = d3zoom()
       .scaleExtent([1, MAX_ZOOM])
       .translateExtent([
-        [0, 0],
-        [WIDTH, HEIGHT],
+        [0, -NORTH_SLACK],
+        [WIDTH, height],
       ])
       .on('zoom', (event) => setTransform(event.transform));
     svg.call(behavior).on('dblclick.zoom', null);
     zoomRef.current = behavior;
     return () => svg.on('.zoom', null);
-  }, []);
+  }, [height]);
 
   const zoomBy = (factor) => select(svgRef.current).transition().duration(250).call(zoomRef.current.scaleBy, factor);
   const resetZoom = () => select(svgRef.current).transition().duration(300).call(zoomRef.current.transform, zoomIdentity);
@@ -68,7 +108,7 @@ export default function RailMap({ provinces, lines, hoveredId, selectedId, onHov
 
   const handleMove = (event) => {
     const rect = svgRef.current.getBoundingClientRect();
-    setPointer({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+    setPointer({ x: event.clientX - rect.left, y: event.clientY - rect.top, flip: event.clientX - rect.left > rect.width * 0.62 });
   };
 
   return (
@@ -76,25 +116,23 @@ export default function RailMap({ provinces, lines, hoveredId, selectedId, onHov
       <svg
         ref={svgRef}
         className={`map-svg${active ? ' is-focused' : ''}`}
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        viewBox={`0 0 ${WIDTH} ${height}`}
         role="img"
-        aria-label="Mapa de la red ferroviaria de España"
-        onClick={(e) => e.target === svgRef.current && onSelect(null)}
+        aria-label="Mapa de la red de alta velocidad de España"
       >
-        <rect className="map-sea" width={WIDTH} height={HEIGHT} onClick={() => onSelect(null)} />
+        <rect className="map-sea" width={WIDTH} height={height} onClick={() => onSelect(null)} />
         <g transform={transform.toString()}>
-          <ProvinceLayer shapes={provinceShapes} />
-          <path className="map-inset" d={frame} />
+          <BaseLayer {...base} inset={geo.inset} k={k} />
           <LineLayer shapes={lineShapes} onHover={onHover} onSelect={onSelect} />
           {active && <ActiveLine shape={active} k={k} />}
-          <LabelLayer shapes={provinceShapes} k={k} />
+          <LabelLayer {...base} k={k} />
         </g>
       </svg>
 
       <div className="map-zoom" role="group" aria-label="Zoom del mapa">
         <button type="button" onClick={() => zoomBy(1.6)} aria-label="Acercar">+</button>
         <button type="button" onClick={() => zoomBy(1 / 1.6)} aria-label="Alejar">−</button>
-        <button type="button" onClick={resetZoom} aria-label="Restablecer vista" className="map-zoom-reset">⟲</button>
+        <button type="button" onClick={resetZoom} aria-label="Restablecer vista">⟲</button>
       </div>
 
       {active && hoveredId && pointer && <Tooltip line={active.line} pointer={pointer} />}
@@ -102,12 +140,23 @@ export default function RailMap({ provinces, lines, hoveredId, selectedId, onHov
   );
 }
 
-const ProvinceLayer = memo(function ProvinceLayer({ shapes }) {
+const BaseLayer = memo(function BaseLayer({ countryShapes, provinceShapes, inset }) {
   return (
-    <g className="provinces">
-      {shapes.map((s) => (
-        <path key={s.name} d={s.d} />
-      ))}
+    <g pointerEvents="none">
+      <g className="countries">
+        {countryShapes.map((c) => (
+          <path key={c.name} d={c.d} />
+        ))}
+      </g>
+      <rect className="map-inset" x={inset.x} y={inset.y} width={inset.w} height={inset.h} rx="8" />
+      <text className="map-inset-label" x={inset.x + 10} y={inset.y + 13}>
+        Islas Canarias
+      </text>
+      <g className="provinces">
+        {provinceShapes.map((s) => (
+          <path key={s.name} d={s.d} />
+        ))}
+      </g>
     </g>
   );
 });
@@ -116,13 +165,7 @@ const LineLayer = memo(function LineLayer({ shapes, onHover, onSelect }) {
   return (
     <g className="lines">
       {shapes.map(({ line, d }) => (
-        <path
-          key={line.id}
-          className="line"
-          d={d}
-          stroke={line.color}
-          strokeWidth={CATEGORY_BY_ID[line.category].width}
-        />
+        <path key={line.id} className="line" d={d} stroke={line.color} />
       ))}
       {/* Zonas invisibles más anchas para que sea fácil pasar el ratón por encima */}
       <g className="hits">
@@ -145,42 +188,48 @@ const LineLayer = memo(function LineLayer({ shapes, onHover, onSelect }) {
 
 function ActiveLine({ shape, k }) {
   const { line, d, stops } = shape;
-  const width = CATEGORY_BY_ID[line.category].width + 1.6;
   return (
     <g className="active-line" pointerEvents="none">
-      <path d={d} className="active-casing" strokeWidth={width + 3} />
-      <path d={d} stroke={line.color} strokeWidth={width} />
+      <path d={d} className="active-casing" />
+      <path d={d} className="active-stroke" stroke={line.color} />
       {stops.map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r={3.2 / k} fill="var(--surface)" stroke={line.color} strokeWidth={1.6 / k} />
+        <circle key={i} cx={x} cy={y} r={4 / k} className="active-stop" stroke={line.color} strokeWidth={2 / k} />
       ))}
     </g>
   );
 }
 
-const LabelLayer = memo(function LabelLayer({ shapes, k }) {
+const LabelLayer = memo(function LabelLayer({ provinceShapes, countryLabels, k }) {
   return (
-    <g className="labels" aria-hidden="true">
-      {shapes.map((s) => (
-        <text key={s.name} x={s.x} y={s.y} fontSize={s.size / Math.sqrt(k)} strokeWidth={3 / k}>
-          {s.name}
-        </text>
-      ))}
+    <g aria-hidden="true">
+      <g className="country-labels">
+        {countryLabels.map((c) => (
+          <text key={c.name} x={c.x} y={c.y} fontSize={13 / Math.sqrt(k)}>
+            {c.name}
+          </text>
+        ))}
+      </g>
+      <g className="labels">
+        {provinceShapes.map((s) => (
+          <text key={s.name} x={s.x} y={s.y} fontSize={s.size / Math.sqrt(k)} strokeWidth={3 / k}>
+            {s.name}
+          </text>
+        ))}
+      </g>
     </g>
   );
 });
 
 function Tooltip({ line, pointer }) {
-  const category = CATEGORY_BY_ID[line.category];
   return (
-    <div className="map-tooltip" style={{ left: pointer.x, top: pointer.y }}>
+    <div className={`map-tooltip${pointer.flip ? ' is-flipped' : ''}`} style={{ left: pointer.x, top: pointer.y }}>
       <div className="tooltip-title">
         <span className="swatch" style={{ background: line.color }} />
         {line.name}
       </div>
       <div className="tooltip-meta">
-        {category.label} · {line.types.join(', ')}
+        {line.types.join(', ')} · {line.stops.length} paradas
       </div>
-      {line.category !== 'cer' && <div className="tooltip-meta">{line.stops.length} paradas</div>}
     </div>
   );
 }

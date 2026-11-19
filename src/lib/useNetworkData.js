@@ -1,26 +1,28 @@
 import { useEffect, useState } from 'react';
-import { CATEGORIES } from './categories.js';
-import { lineColor } from './colors.js';
 
-const ORDER = Object.fromEntries(CATEGORIES.map((c, i) => [c.id, i]));
-
-// Se descarga una sola vez: al volver a la pestaña «Mapa» se reutiliza.
-let cache = null;
-function loadNetwork() {
-  cache ??= Promise.all([
-    fetch('/data/provinces.json').then((r) => r.json()),
-    fetch('/data/network.json').then((r) => r.json()),
-  ]).then(([provinces, network]) => {
-    const lines = network.lines
-      .sort((a, b) => ORDER[a.category] - ORDER[b.category] || a.name.localeCompare(b.name, 'es'))
-      .map((line, i) => ({ ...line, color: lineColor(i) }));
-    return { status: 'ready', provinces, lines, meta: network };
+const getJson = (url) =>
+  fetch(url).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${url}`);
+    return r.json();
   });
+
+// Se descarga una sola vez: al volver a la sección «Mapa» se reutiliza.
+let cache = null;
+export function loadNetwork() {
+  cache ??= Promise.all([getJson('/data/provinces.json'), getJson('/data/countries.json'), getJson('/data/network.json')]).then(
+    ([provinces, countries, network]) => ({
+      status: 'ready',
+      provinces,
+      countries,
+      lines: network.lines.sort((a, b) => a.name.localeCompare(b.name, 'es')),
+      meta: network,
+    }),
+  );
   cache.catch(() => (cache = null));
   return cache;
 }
 
-/** Carga provincias y líneas (generadas con `npm run data`) y asigna un color a cada línea. */
+/** Provincias, países vecinos y líneas de alta velocidad (generados con `npm run data`). */
 export function useNetworkData() {
   const [state, setState] = useState({ status: 'loading' });
 

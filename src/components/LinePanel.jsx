@@ -1,20 +1,15 @@
 import { useMemo, useState } from 'react';
-import { CATEGORIES } from '../lib/categories.js';
 import LineDetails from './LineDetails.jsx';
 
 const normalize = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-/** Panel lateral: buscador + listado de líneas agrupadas por tipo, o el detalle de la seleccionada. */
+/** Panel lateral: buscador + listado de líneas, o el detalle de la seleccionada. */
 export default function LinePanel({ lines, selected, hoveredId, onHover, onSelect }) {
   const [query, setQuery] = useState('');
 
-  const groups = useMemo(() => {
+  const matches = useMemo(() => {
     const q = normalize(query.trim());
-    const match = (l) => !q || normalize(`${l.name} ${l.stops.join(' ')} ${l.types.join(' ')}`).includes(q);
-    return [...CATEGORIES]
-      .reverse()
-      .map((c) => ({ ...c, lines: lines.filter((l) => l.category === c.id && match(l)) }))
-      .filter((g) => g.lines.length);
+    return q ? lines.filter((l) => normalize(`${l.name} ${l.stops.join(' ')} ${l.types.join(' ')}`).includes(q)) : lines;
   }, [lines, query]);
 
   if (selected) return <LineDetails line={selected} onClose={() => onSelect(null)} />;
@@ -36,14 +31,14 @@ export default function LinePanel({ lines, selected, hoveredId, onHover, onSelec
       </label>
 
       <div className="panel-scroll">
-        {groups.length === 0 && <p className="empty">No hay líneas que coincidan con «{query}».</p>}
-        {groups.map((g) => (
-          <section key={g.id} className="group">
+        {matches.length === 0 && <p className="empty">No hay líneas que coincidan con «{query}».</p>}
+        {matches.length > 0 && (
+          <section className="group">
             <h3 className="group-title">
-              {g.label} <span>{g.lines.length}</span>
+              Líneas de alta velocidad <span>{matches.length}</span>
             </h3>
             <ul>
-              {g.lines.map((l) => (
+              {matches.map((l) => (
                 <li key={l.id}>
                   <button
                     type="button"
@@ -56,13 +51,13 @@ export default function LinePanel({ lines, selected, hoveredId, onHover, onSelec
                   >
                     <span className="swatch" style={{ background: l.color }} />
                     <span className="line-name">{l.name}</span>
-                    <span className="line-type">{l.types[0]}</span>
+                    <span className="line-type">{l.types.join(' · ').replace('AVE Euromed', 'Euromed')}</span>
                   </button>
                 </li>
               ))}
             </ul>
           </section>
-        ))}
+        )}
       </div>
     </aside>
   );

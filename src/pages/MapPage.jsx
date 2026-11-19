@@ -4,25 +4,34 @@ import CategoryFilter from '../components/CategoryFilter.jsx';
 import LinePanel from '../components/LinePanel.jsx';
 import { useNetworkData } from '../lib/useNetworkData.js';
 import { CATEGORIES } from '../lib/categories.js';
+import { lineColor } from '../lib/colors.js';
 
-export default function MapPage() {
+/** Sección «Mapa»: red de alta velocidad con filtros por tipo de tren y listado de líneas. */
+export default function MapPage({ theme }) {
   const data = useNetworkData();
   const [visible, setVisible] = useState(() => new Set(CATEGORIES.map((c) => c.id)));
   const [hoveredId, setHoveredId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
 
-  const lines = data.lines ?? [];
-  const shown = useMemo(() => lines.filter((l) => visible.has(l.category)), [lines, visible]);
-  const counts = useMemo(
-    () => lines.reduce((acc, l) => ({ ...acc, [l.category]: (acc[l.category] ?? 0) + 1 }), {}),
-    [lines],
+  // Cada línea tiene su color; en modo oscuro se aclara.
+  const lines = useMemo(
+    () => (data.lines ?? []).map((line, i) => ({ ...line, color: lineColor(i, theme) })),
+    [data.lines, theme],
   );
+  const shown = useMemo(() => lines.filter((l) => l.types.some((t) => visible.has(t))), [lines, visible]);
+  const counts = useMemo(() => {
+    const c = {};
+    for (const l of lines) for (const t of l.types) c[t] = (c[t] ?? 0) + 1;
+    return c;
+  }, [lines]);
   const selected = shown.find((l) => l.id === selectedId) ?? null;
 
   const toggle = (id) =>
     setVisible((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        if (next.size > 1) next.delete(id);
+      } else next.add(id);
       return next;
     });
 
@@ -30,9 +39,9 @@ export default function MapPage() {
   const select = useCallback((id) => setSelectedId((cur) => (id && cur === id ? null : id)), []);
 
   return (
-    <section className="page">
+    <section className="page" id="mapa">
       <div className="page-head">
-        <h1>La red ferroviaria de España, de un vistazo</h1>
+        <h1>La alta velocidad en España, de un vistazo</h1>
         <p>
           Pasa el ratón por encima de una línea para resaltarla o púlsala para ver sus paradas. Acércate con la rueda
           del ratón o pellizcando la pantalla.
@@ -53,6 +62,7 @@ export default function MapPage() {
             {data.status === 'ready' && (
               <RailMap
                 provinces={data.provinces}
+                countries={data.countries}
                 lines={shown}
                 hoveredId={hoveredId}
                 selectedId={selected?.id ?? null}
