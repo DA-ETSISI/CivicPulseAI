@@ -14,6 +14,8 @@
  *  - timetable.json  horarios de todos los trenes AV/LD/MD para el buscador de billetes
  *  - provinces.json  provincias de España
  *  - countries.json  Portugal, Francia y Andorra
+ * Y en server/data/:
+ *  - reference.json  nombres de estaciones y trenes para el servidor de incidencias en tiempo real
  */
 import { unzipSync, strFromU8 } from 'fflate';
 import { feature } from 'topojson-client';
@@ -23,6 +25,7 @@ import path from 'node:path';
 
 const SOURCES = {
   ld: 'https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip',
+  cer: 'https://ssl.renfe.com/ftransit/Fichero_CER_FOMENTO/fomento_transit.zip',
   provinces:
     'https://raw.githubusercontent.com/codeforgermany/click_that_hood/main/public/data/spain-provinces.geojson',
   world: 'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json',
@@ -36,6 +39,7 @@ const DAYS = 90;
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CACHE = path.join(ROOT, '.cache');
 const OUT = path.join(ROOT, 'public', 'data');
+const SERVER_OUT = path.join(ROOT, 'server', 'data');
 
 // ---------- utilidades ----------
 
@@ -262,6 +266,31 @@ function buildTimetable({ stops, routes, timesByTrip, trips }, gtfs) {
   };
 }
 
+// ---------- Referencia para el tiempo real ----------
+
+/**
+ * El tiempo real de Renfe solo trae identificadores (nº de tren, id de estación).
+ * Aquí se guarda lo necesario para mostrarlos con nombre: estaciones y trenes de larga distancia.
+ */
+function buildRealtimeReference({ stops, routes, timesByTrip, trips }, cerStops) {
+  const names = {};
+  for (const s of cerStops) names[s.stop_id] = s.stop_name;
+  for (const [id, s] of stops) names[id] = s.stop_name;
+
+  const trains = {};
+  for (const t of trips) {
+    const n = t.trip_short_name;
+    const seq = timesByTrip.get(t.trip_id);
+    if (!n || !seq?.length || trains[n]) continue;
+    trains[n] = {
+      type: routes.get(t.route_id)?.route_short_name ?? 'Tren',
+      from: stops.get(seq[0].stop_id).stop_name,
+      to: stops.get(seq.at(-1).stop_id).stop_name,
+    };
+  }
+  return { stops: names, trains };
+}
+
 // ---------- Mapa base ----------
 
 function cleanRing(ring, tol, digits) {
@@ -316,9 +345,11 @@ function buildCountries(topo) {
 
 await mkdir(CACHE, { recursive: true });
 await mkdir(OUT, { recursive: true });
+await mkdir(SERVER_OUT, { recursive: true });
 
-const [ldZip, provBuf, worldBuf] = await Promise.all([
+const [ldZip, cerZip, provBuf, worldBuf] = await Promise.all([
   download(SOURCES.ld, 'renfe-ld.zip'),
+  download(SOURCES.cer, 'renfe-cercanias.zip'),
   download(SOURCES.provinces, 'provinces.geojson'),
   download(SOURCES.world, 'countries-50m.json'),
 ]);
@@ -341,6 +372,11 @@ await writeFile(path.join(OUT, 'network.json'), JSON.stringify(network));
 await writeFile(path.join(OUT, 'timetable.json'), JSON.stringify(timetable));
 await writeFile(path.join(OUT, 'provinces.json'), JSON.stringify(provinces));
 await writeFile(path.join(OUT, 'countries.json'), JSON.stringify(countries));
+
+const cerStops = unzip(cerZip, ['stops.txt'])['stops.txt'];
+const reference = buildRealtimeReference(indexed, cerStops);
+await writeFile(path.join(SERVER_OUT, 'reference.json'), JSON.stringify(reference));
+console.log(`✔ Referencia tiempo real: ${Object.keys(reference.stops).length} estaciones, ${Object.keys(reference.trains).length} trenes`);
 
 console.log(
   `✔ Mapa: ${network.lines.length} líneas AV · Billetes: ${timetable.trains.length} trenes, ${timetable.stations.length} estaciones, ${DAYS} días desde ${timetable.base} · ${provinces.features.length} provincias · ${countries.features.length} países`,
