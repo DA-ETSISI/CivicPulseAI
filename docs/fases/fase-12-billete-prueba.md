@@ -32,6 +32,15 @@ En «Mi billete» de producción no cambia nada: el enlace de ejemplo sigue usan
 - `src/pages/MyTicketPage.jsx`: prop `demoMode` (título propio, arranque en la demo, sin tocar lo guardado).
 - `src/dev/ticketDemo.jsx`: solo comentarios y la etiqueta accesible de la barra.
 
+## Extra: botones − / + del selector de viajeros (Billetes)
+Para que se note que se pulsan (`src/components/tickets/PassengerPicker.jsx` y `.stepper` en `src/index.css`):
+- **Al pulsar** el botón se hunde (escala 0,86 en 80 ms, con un halo turquesa) y al soltar vuelve con un pequeño
+  rebote (`--ease-settle`).
+- **Al pasar el ratón** se tiñe de turquesa (`--accent-soft` de fondo, borde y signo en `--accent`).
+- **El número** entra deslizándose hacia arriba al sumar y hacia abajo al restar (220 ms). El contenedor con
+  `aria-live` no cambia, así que el lector de pantalla sigue anunciando el valor nuevo.
+- Los botones desactivados no se animan. Con «reducir movimiento» solo cambia el color.
+
 ## Comprobado
 Escritorio, tema oscuro: la pestaña abre la demo con cuenta atrás, itinerario, transbordo y mapa; «Salir de la
 demo» lleva a «Mi billete»; un billete guardado no se borra. `npm test` (21 tests) y `vite build` sin errores.
