@@ -10,6 +10,19 @@
 }
 .subtab:hover { color: var(--ink); }
 .subtab.is-on { background: var(--accent); color: var(--on-accent); }
+/* Píldora que se desliza entre opciones (SlideTabs); sin JS, se usa el fondo del botón activo. */
+.subtabs { position: relative; }
+.subtabs-pill {
+  position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 999px; background: var(--accent);
+  transition: transform 0.35s cubic-bezier(0.3, 0.8, 0.3, 1), width 0.35s cubic-bezier(0.3, 0.8, 0.3, 1);
+}
+.subtab { position: relative; z-index: 1; }
+.subtab.has-pill.is-on { background: none; }
+/* El contenido entra deslizándose desde el lado de la pestaña elegida. */
+.tab-panel.slide-next { animation: tab-in-next 0.35s cubic-bezier(0.3, 0.8, 0.3, 1); }
+.tab-panel.slide-prev { animation: tab-in-prev 0.35s cubic-bezier(0.3, 0.8, 0.3, 1); }
+@keyframes tab-in-next { from { opacity: 0; transform: translateX(32px); } }
+@keyframes tab-in-prev { from { opacity: 0; transform: translateX(-32px); } }
 .subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- Compensaciones ---------- */

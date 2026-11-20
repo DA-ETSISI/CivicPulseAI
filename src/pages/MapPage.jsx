@@ -50,12 +50,14 @@ export default function MapPage({ theme, id = 'mapa' }) {
   const selected = shown.find((l) => l.id === selectedId) ?? null;
   const provinceName = data.provinces?.features.find((f) => f.properties.code === provinceCode)?.properties.name;
 
+  // Pulsar un tipo lo muestra u oculta. Si es el único que queda activo (p. ej. solo AVE),
+  // en vez de no hacer nada se vuelven a mostrar todos.
   const toggle = (type) =>
     setVisible((prev) => {
+      if (prev.size === 1 && prev.has(type)) return new Set(CATEGORIES.map((c) => c.id));
       const next = new Set(prev);
-      if (next.has(type)) {
-        if (next.size > 1) next.delete(type);
-      } else next.add(type);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
       return next;
     });
 

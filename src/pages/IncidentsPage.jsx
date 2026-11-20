@@ -5,6 +5,7 @@ import TrainStatusList from '../components/incidents/TrainStatusList.jsx';
 import TrainDetail from '../components/incidents/TrainDetail.jsx';
 import AlertsPanel from '../components/incidents/AlertsPanel.jsx';
 import CompensationSection from '../components/compensation/CompensationSection.jsx';
+import SlideTabs from '../components/SlideTabs.jsx';
 import { STATUSES, useLiveTrains } from '../lib/useLiveTrains.js';
 import { useTrainDetail } from '../lib/useTrainDetail.js';
 import { loadCercaniasTracks, useNetworkData } from '../lib/useNetworkData.js';
@@ -40,6 +41,15 @@ function useAgo(timestamp) {
  */
 export default function IncidentsPage() {
   const [tab, setTab] = useState('live');
+  // Hacia qué lado entra el contenido al cambiar de pestaña (null = sin animación al cargar).
+  const [slide, setSlide] = useState(null);
+  const chooseTab = (id) => {
+    if (id === tab) return;
+    const idx = (x) => TABS.findIndex((t) => t.id === x);
+    setSlide(idx(id) > idx(tab) ? 'next' : 'prev');
+    setTab(id);
+  };
+  const panelClass = `tab-panel${slide ? ` slide-${slide}` : ''}`;
   const live = useLiveTrains();
   const map = useNetworkData();
   const [statuses, setStatuses] = useState(() => new Set(STATUSES.map((s) => s.id)));
@@ -112,31 +122,16 @@ export default function IncidentsPage() {
         </div>
       </div>
 
-      <div className="subtabs" role="tablist" aria-label="Apartados de incidencias">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`tab-${t.id}`}
-            aria-selected={tab === t.id}
-            aria-controls={`panel-${t.id}`}
-            className={`subtab${tab === t.id ? ' is-on' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <SlideTabs tabs={TABS} value={tab} onChange={chooseTab} label="Apartados de incidencias" />
 
       {tab === 'compensaciones' && (
-        <div role="tabpanel" id="panel-compensaciones" aria-labelledby="tab-compensaciones">
+        <div role="tabpanel" id="panel-compensaciones" aria-labelledby="tab-compensaciones" className={panelClass}>
           <CompensationSection />
         </div>
       )}
 
       {tab === 'live' && (
-        <div role="tabpanel" id="panel-live" aria-labelledby="tab-live">
+        <div role="tabpanel" id="panel-live" aria-labelledby="tab-live" className={panelClass}>
           {live.status === 'error' && (
             <div className="card placeholder">
               <h2>No hay conexión con el servidor de datos</h2>

@@ -1,4 +1,5 @@
 import { scrollToSection } from '../../lib/navigation.js';
+import { useInView } from '../../lib/useInView.js';
 
 /**
  * Portada: nombre de la web sobre una foto de un AVE a pantalla completa.
@@ -6,9 +7,11 @@ import { scrollToSection } from '../../lib/navigation.js';
  */
 export default function Hero({ live }) {
   const total = live.data?.total;
+  // Se desvanece al bajar al mapa y vuelve a aparecer al subir.
+  const [ref, visible] = useInView();
 
   return (
-    <section className="hero" id="inicio" aria-label="Portada">
+    <section ref={ref} className={`hero reveal${visible ? ' is-visible' : ''}`} id="inicio" aria-label="Portada">
       <img
         className="hero-img"
         src="/images/hero-train.jpg"

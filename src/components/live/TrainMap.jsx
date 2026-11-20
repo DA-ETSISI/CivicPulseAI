@@ -3,6 +3,8 @@ import { WIDTH, buildBase, buildGeometry } from '../../lib/mapGeometry.js';
 import { useMapZoom } from '../../lib/useMapZoom.js';
 import { CITY_RADIUS_KM, SERVICES, SERVICE_BY_ID } from '../../lib/trainFilters.js';
 import { BaseLayer, LabelLayer, ZoomControls } from '../MapBase.jsx';
+import { useRailways } from '../../lib/useRailways.js';
+import RailNetwork from './RailNetwork.jsx';
 
 const CANARY = new Set(['35', '38']);
 /** Tamaño de cada punto según el tipo de tren (en píxeles de pantalla). */
@@ -30,6 +32,7 @@ export default function TrainMap({
   const [hover, setHover] = useState(null);
   const [wheelHint, setWheelHint] = useState(false);
   const hintTimer = useRef(0);
+  const railways = useRailways();
 
   const geo = useMemo(() => buildGeometry(provinces, countries), [provinces, countries]);
   const base = useMemo(() => buildBase(provinces, countries, geo), [provinces, countries, geo]);
@@ -108,6 +111,8 @@ export default function TrainMap({
           <BaseLayer {...base} inset={geo.inset} />
           {focus?.kind === 'province' && <ProvinceHighlight shapes={base.provinceShapes} name={focus.name} />}
           {focus?.kind === 'city' && <CityRing geo={geo} city={focus} k={k} />}
+          {/* Red de fondo solo visual: los clics van a las líneas de Renfe (clic = ver, doble clic = billete). */}
+          {railways && <RailNetwork data={railways} path={geo.path} />}
           <Tracks
             tracks={trackPaths}
             activeIds={[selectedLineId, hoverLineId]}
@@ -161,6 +166,8 @@ export default function TrainMap({
       <div className={`wheel-hint${wheelHint ? ' is-visible' : ''}`} aria-hidden="true">
         Usa <kbd>Ctrl</kbd> + rueda para acercar el mapa
       </div>
+
+      {railways && <div className="map-attribution">Vías © OpenStreetMap</div>}
 
       {hover?.line && (
         <div className={`map-tooltip${hover.flip ? ' is-flipped' : ''}`} style={{ left: hover.x, top: hover.y }}>
