@@ -1,4 +1,17 @@
-import { geoConicConformal, geoMercator, geoPath } from 'd3-geo';
+import { geoConicConformal, geoDistance, geoMercator, geoPath } from 'd3-geo';
+
+/** Radio medio de la Tierra en km. */
+const EARTH_KM = 6371;
+
+/** Distancia real en km entre dos puntos [lon, lat] (sobre la esfera terrestre, no en el plano del mapa). */
+export const distanceKm = (a, b) => geoDistance(a, b) * EARTH_KM;
+
+/** Longitud en km de un recorrido que pasa por varios puntos [lon, lat], p. ej. las paradas de un tren. */
+export function routeKm(points) {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += distanceKm(points[i - 1], points[i]);
+  return total;
+}
 
 export const WIDTH = 1000;
 const PAD = 18;

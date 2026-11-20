@@ -4,6 +4,7 @@
  */
 
 import { normalize } from './text.js';
+import { routeKm } from './mapGeometry.js';
 
 let cache = null;
 export function loadTimetable() {
@@ -126,14 +127,6 @@ const FARES = {
 const faresFor = (type) =>
   type === 'AVLO' ? FARES.avlo : ['AVE', 'AVE Euromed', 'Intercity'].includes(type) ? FARES.full : FARES.single;
 
-function km([lat1, lon1], [lat2, lon2]) {
-  const r = Math.PI / 180;
-  const a =
-    Math.sin(((lat2 - lat1) * r) / 2) ** 2 +
-    Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2;
-  return 12742 * Math.asin(Math.sqrt(a));
-}
-
 const roundPrice = (p) => Math.round(p * 20) / 20;
 
 /** Niños (4–13 años) pagan el 60 %; bebés viajan gratis. */
@@ -158,12 +151,10 @@ export function searchTrains(tt, fromIds, toIds, iso) {
     for (let k = i + 1; k < train.s.length; k++) if (to.has(train.s[k][0])) { j = k; break; }
     if (j < 0) continue;
 
-    let distance = 0;
-    for (let k = i; k < j; k++) {
-      const a = tt.stations[train.s[k][0]];
-      const b = tt.stations[train.s[k + 1][0]];
-      distance += km([a.lat, a.lon], [b.lat, b.lon]) * 1.15; // la vía no es una línea recta
-    }
+    // Distancia real entre estaciones, parada a parada (mapGeometry.js).
+    const stops = train.s.slice(i, j + 1).map(([si]) => [tt.stations[si].lon, tt.stations[si].lat]);
+    const stationKm = routeKm(stops);
+    const distance = stationKm * 1.15; // para el precio: la vía no es una línea recta
 
     const type = tt.types[train.t];
     const dep = train.s[i][2];
@@ -188,6 +179,8 @@ export function searchTrains(tt, fromIds, toIds, iso) {
       duration: arr - dep,
       stopsBetween: j - i - 1,
       distance: Math.round(distance),
+      /** Km entre estaciones siguiendo las paradas del tren (para la huella de carbono). */
+      stationKm: Math.round(stationKm),
       fares: faresFor(type).map((f) => ({ ...f, price: roundPrice(base * f.mult) })),
     });
   }
