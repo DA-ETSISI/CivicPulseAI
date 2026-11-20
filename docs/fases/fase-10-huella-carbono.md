@@ -36,6 +36,16 @@ CO₂ ahorras haciendo ese trayecto en tren en lugar de en coche particular.
 - Nota con enlaces a las fuentes (MITECO y Renfe) al pie del resumen.
 - Estilos en `src/styles/carbon.css`, con los colores de estado de la web (claro y oscuro).
 
+### Hojita en la lista de trenes
+- Debajo del precio de cada tarjeta («desde 60,45 €») aparece una hojita verde con
+  «Ahorras X kg CO₂»: lo que ahorra **un viajero** frente a un coche de **gasolina**.
+- Al pasar el ratón se ve el detalle: «Tren: X kg · Coche: Y kg (por viajero, N km)».
+  Los lectores de pantalla lo leen también.
+- Usa el mismo cálculo que el resumen (`compareWithCar` de `carbon.js`) y la misma hojita (`LeafIcon`),
+  así que las cifras coinciden con las del resumen de compra para 1 adulto y gasolina.
+- En móvil la hojita baja a su propia línea, alineada a la derecha.
+- Código: `TrainCarbon` en `src/components/tickets/TrainList.jsx`, estilos `.train-eco` en `src/styles/carbon.css`.
+
 ## Dónde está el código
 ```
 src/lib/mapGeometry.js             distanceKm y routeKm (distancia real entre estaciones)
@@ -51,6 +61,9 @@ src/styles/carbon.css
 - `npm test`: 21 pruebas (13 de compensaciones + 8 nuevas), todas pasan.
 - En el navegador: Madrid → Sevilla en AVE (421 km entre estaciones, 1 adulto): coche de gasolina 77 kg, tren 1,6 kg,
   **ahorro de 75 kg (98 %)**; con diésel, 65 kg. En escritorio y en móvil (390 px), sin errores ni scroll lateral.
+- Hojita en la lista: Murcia del Carmen → Valladolid-Campo Grande. AVE 05763 (553 km): «Ahorras 99 kg CO₂»
+  (tren 2,1 kg · coche 101 kg); AVLO 05817 (623 km, más paradas): «Ahorras 112 kg CO₂». En escritorio y en
+  móvil (375 px), sin errores en consola. `npm test`: 21 pruebas, todas pasan; `npm run build` compila.
 
 ## Fuentes
 - [MITECO · Calculadoras de huella de carbono y factores de emisión](https://www.miteco.gob.es/es/cambio-climatico/temas/mitigacion-politicas-y-medidas/calculadoras.html)

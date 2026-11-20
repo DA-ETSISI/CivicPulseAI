@@ -1,6 +1,24 @@
 import { useState } from 'react';
 import { addDays, fmtDate, fmtDuration, fmtPrice, fmtTime, todayIso } from '../../lib/timetable.js';
 import { useTrainInsights } from '../../lib/useTrainInsights.js';
+import { compareWithCar, fmtKg } from '../../lib/carbon.js';
+import { LeafIcon } from './CarbonSaving.jsx';
+
+/** CO₂ que ahorra un viajero en este tren frente a ir en coche de gasolina (el cálculo está en carbon.js). */
+function TrainCarbon({ km }) {
+  const c = compareWithCar({ km, people: 1 });
+  if (!c) return null;
+  const detail = `Tren: ${fmtKg(c.trainKg)} · Coche: ${fmtKg(c.carKg)}`;
+  return (
+    <span className="train-eco" title={`${detail} (por viajero, ${km.toLocaleString('es-ES')} km)`}>
+      <LeafIcon size={14} />
+      <span>
+        Ahorras {fmtKg(c.savedKg)} CO₂
+        <span className="visually-hidden"> frente al coche. {detail}</span>
+      </span>
+    </span>
+  );
+}
 
 /** Estado en directo (si circula hoy) y puntualidad de los últimos 30 días. */
 function TrainInsight({ live, stats }) {
@@ -79,6 +97,7 @@ export default function TrainList({ title, date, minDate, maxDate, results, sele
                   <span className="train-price">
                     <small>desde</small>
                     {fmtPrice(from)}
+                    <TrainCarbon km={r.stationKm} />
                   </span>
                 </button>
 

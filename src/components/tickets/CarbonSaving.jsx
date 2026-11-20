@@ -57,9 +57,10 @@ export function FuelPicker({ value, onChange }) {
   );
 }
 
-function LeafIcon() {
+/** Hojita verde (también la usa la lista de trenes). */
+export function LeafIcon({ size = 18 }) {
   return (
-    <svg className="carbon-leaf" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <svg className="carbon-leaf" viewBox="0 0 20 20" width={size} height={size} aria-hidden="true">
       <path d="M4 16C4 9 8 4 17 3c0 9-5 13-11 13 M4 16l6-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );

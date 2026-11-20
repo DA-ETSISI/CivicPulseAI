@@ -28,6 +28,19 @@
 .carbon-total { font-size: 0.85rem; color: var(--ink-2); }
 .carbon-total strong { color: var(--st-moving); }
 
+/* ---------- Hojita bajo el precio en la lista de trenes ---------- */
+.train-eco {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 4px;
+  font-size: 0.72rem; font-weight: 600; color: var(--st-moving); white-space: nowrap; cursor: help;
+}
+.train-eco .carbon-leaf { margin-top: 0; }
+
+@media (max-width: 560px) {
+  /* En móvil el precio va en una fila: la hojita baja a su propia línea, a la derecha. */
+  .train-price:has(.train-eco) { flex-wrap: wrap; }
+  .train-eco { flex-basis: 100%; justify-content: flex-end; margin-top: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .carbon-bar-fill { transition: none; }
 }
