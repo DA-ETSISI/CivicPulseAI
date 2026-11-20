@@ -8,6 +8,7 @@ const LINKS = [
   { id: 'incidencias', label: 'Incidencias' },
   { id: 'rutas', label: 'Rutas' },
   { id: 'mi-billete', label: 'Mi billete' },
+  { id: 'billete-prueba', label: 'Billete prueba' },
 ];
 
 /**

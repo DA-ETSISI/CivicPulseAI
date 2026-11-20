@@ -11,7 +11,9 @@ import { useTheme } from './lib/theme.js';
 const PAGES = {
   incidencias: () => <IncidentsPage />,
   rutas: ({ theme }) => <RoutesPage theme={theme} />,
-  'mi-billete': () => <MyTicketPage />,
+  // La `key` distinta hace que cada pestaña empiece con su propio estado (la demo no se mezcla con el billete real).
+  'mi-billete': () => <MyTicketPage key="mi-billete" />,
+  'billete-prueba': () => <MyTicketPage key="billete-prueba" demoMode />,
 };
 
 export default function App() {

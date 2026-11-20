@@ -1,6 +1,6 @@
 /**
- * Modo demo de «Mi billete» (SOLO en desarrollo: la página importa este archivo dentro de
- * `if (import.meta.env.DEV)`, así que no entra en el build de producción).
+ * Modo demo de «Mi billete». Se carga solo bajo demanda (import dinámico): en desarrollo con el enlace
+ * de ejemplo o ?demo=, y siempre en la pestaña «Billete prueba» (también en el build de producción).
  *
  * Carga viajes ficticios de `mi-billete-demo.json` directamente como itinerario, con sus incidencias
  * (retrasos, cancelaciones, cambios de vía), y un reloj simulado para ver la cuenta atrás en cada momento.
@@ -85,7 +85,7 @@ export function DemoPanel({ demo, now, onScenario, onClock, onExit }) {
   const minutes = Math.floor((now - dayStart) / 60_000);
   const [min, max] = demo.range;
   return (
-    <div className="demo-bar" role="region" aria-label="Modo demo (solo en desarrollo)">
+    <div className="demo-bar" role="region" aria-label="Modo demo con datos ficticios">
       <span className="demo-tag">Demo · datos ficticios</span>
       <label className="demo-field">
         Escenario

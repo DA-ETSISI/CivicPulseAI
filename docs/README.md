@@ -29,7 +29,10 @@ Cada fase explica qué se hizo, por qué y dónde está el código.
 | [Fase 8](fases/fase-08-compensaciones.md) | Incidencias: calculadora de compensaciones por retraso, guía para reclamar y derechos del pasajero |
 | [Fase 9](fases/fase-09-mi-billete.md) | Mi billete (itinerario, transbordos, cuenta atrás, QR con privacidad), mapa de Rutas más grande, aviso rojo y hover de comunidades |
 | [Fase 10](fases/fase-10-huella-carbono.md) | Billetes: CO₂ que ahorras en tren frente al coche, con factores oficiales del MITECO y Renfe |
-| [Fase 12](fases/fase-12-avisos-y-seguridad.md) | Incidencias: avisos clasificados en huelgas, cancelaciones y retrasos; revisión de seguridad del servidor |
+| [Fase 11](fases/fase-11-red-ferroviaria.md) | Red ferroviaria de viajeros de fondo en el mapa en directo |
+| [Fase 12](fases/fase-12-fronteras-y-movil.md) | Fronteras ajustadas, sin vías en las islas y formulario de billetes en móvil |
+| [Fase 13](fases/fase-13-avisos-y-seguridad.md) | Incidencias: avisos clasificados en huelgas, cancelaciones y retrasos; revisión de seguridad del servidor |
+| [Fase 14](fases/fase-14-billete-prueba.md) | Pestaña «Billete prueba»: la demo de Mi billete con datos ficticios, también en producción |
 
 ## Fuentes de datos
 
