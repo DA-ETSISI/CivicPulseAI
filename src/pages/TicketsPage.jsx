@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import SearchForm from '../components/tickets/SearchForm.jsx';
 import TrainList from '../components/tickets/TrainList.jsx';
 import BookingSummary, { legTotal } from '../components/tickets/BookingSummary.jsx';
@@ -6,6 +6,7 @@ import PassengerForm from '../components/tickets/PassengerForm.jsx';
 import Confirmation from '../components/tickets/Confirmation.jsx';
 import { findStationOption, loadTimetable, searchTrains, todayIso } from '../lib/timetable.js';
 import { scrollToSection } from '../lib/navigation.js';
+import { useInView } from '../lib/useInView.js';
 
 const STEPS = [
   { id: 'outbound', label: 'Ida' },
@@ -30,18 +31,11 @@ export default function TicketsPage({ trip }) {
   const [draft, setDraft] = useState(null);
   // Cambia cada vez que el mapa rellena el buscador, para que el formulario se vuelva a montar con esos datos.
   const [formVersion, setFormVersion] = useState(0);
-  const sectionRef = useRef(null);
-  const [visible, setVisible] = useState(false);
+  // Aparece al llegar a la sección y desaparece al irse (también al volver al mapa).
+  const [sectionRef, visible] = useInView();
 
   useEffect(() => {
     loadTimetable().then(setTimetable, () => setFailed(true));
-  }, []);
-
-  // Aparición suave al llegar a la sección
-  useEffect(() => {
-    const observer = new IntersectionObserver(([entry]) => entry.isIntersecting && setVisible(true), { threshold: 0.08 });
-    observer.observe(sectionRef.current);
-    return () => observer.disconnect();
   }, []);
 
   const minDate = useMemo(() => {
@@ -88,7 +82,7 @@ export default function TicketsPage({ trip }) {
     setInbound(null);
     setBooking(null);
     setFormVersion((v) => v + 1);
-    setVisible(true);
+    // (La sección se muestra sola al llegar a ella con el desplazamiento: ver useInView.)
     if (from && to && from.key !== to.key) {
       setDraft(null);
       setQuery(form);

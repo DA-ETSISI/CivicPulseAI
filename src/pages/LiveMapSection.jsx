@@ -6,6 +6,7 @@ import LineCard from '../components/live/LineCard.jsx';
 import { useNetworkData } from '../lib/useNetworkData.js';
 import { useAgo } from '../lib/useTrainMap.js';
 import { inPlace } from '../lib/trainFilters.js';
+import { useInView } from '../lib/useInView.js';
 
 /**
  * Sección «Mapa» de la portada: todos los trenes de España en tiempo real, con filtros
@@ -19,6 +20,8 @@ export default function LiveMapSection({ live, onBook }) {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedLineId, setSelectedLineId] = useState(null);
   const ago = useAgo(live.fetchedAt);
+  // Aparece al llegar desde la portada o los billetes y desaparece al irse.
+  const [sectionRef, visible] = useInView();
 
   const trains = live.data?.trains ?? [];
 
@@ -74,7 +77,7 @@ export default function LiveMapSection({ live, onBook }) {
   };
 
   return (
-    <section className="page live-section" id="mapa" aria-labelledby="mapa-title">
+    <section ref={sectionRef} className={`page live-section reveal${visible ? ' is-visible' : ''}`} id="mapa" aria-labelledby="mapa-title">
       <div className="page-head live-head">
         <p className="eyebrow">
           <span className="live-pulse" aria-hidden="true" /> En directo
