@@ -7,6 +7,7 @@ import { useNetworkData } from '../lib/useNetworkData.js';
 import { useTrainInsights } from '../lib/useTrainInsights.js';
 import { loadTimetable, addDays } from '../lib/timetable.js';
 import { decodeQr, parseTicketText } from '../lib/qrTicket.js';
+import { navigate } from '../lib/navigation.js';
 import {
   alternativesAfter,
   buildItinerary,
@@ -18,12 +19,6 @@ import {
   saveTrip,
   simulatedDelays,
 } from '../lib/myTicket.js';
-
-/**
- * Modo demo: SOLO en desarrollo. En el build de producción `import.meta.env.DEV` es `false`, el import
- * dinámico desaparece y el fixture no se incluye.
- */
-const DEMO_ENABLED = import.meta.env.DEV;
 
 const PRIVACY_TEXT =
   'Tu billete se procesa en tu dispositivo. Solo usamos el número de tren, la fecha y las estaciones para mostrarte tu viaje. No guardamos tu nombre ni tus datos personales.';
@@ -49,13 +44,20 @@ function useDepartureNotices(tl, enabled, minutes) {
   }, [tl, enabled, minutes]);
 }
 
-/** Sección «Mi billete»: el viaje de tu billete de tren, con transbordos y cuenta atrás. */
-export default function MyTicketPage() {
+/**
+ * Sección «Mi billete»: el viaje de tu billete de tren, con transbordos y cuenta atrás.
+ * Con `demoMode` es la pestaña «Billete prueba»: abre directamente la demo (datos ficticios) y no lee
+ * ni toca el billete guardado en el dispositivo. «Salir de la demo» lleva a «Mi billete».
+ */
+export default function MyTicketPage({ demoMode = false }) {
+  // Modo demo: en desarrollo (enlace de ejemplo y ?demo=) y siempre en «Billete prueba».
+  // Solo en ese caso se descarga el fixture (datos inventados, sin nada personal).
+  const demoEnabled = import.meta.env.DEV || demoMode;
   const map = useNetworkData();
   const [timetable, setTimetable] = useState(null);
-  const [ticket, setTicket] = useState(() => loadTrip());
+  const [ticket, setTicket] = useState(() => (demoMode ? null : loadTrip()));
   const [extra, setExtra] = useState(null); // coche y plaza: solo en memoria, nunca se guardan
-  const [remember, setRemember] = useState(() => hasSavedTrip());
+  const [remember, setRemember] = useState(() => (demoMode ? false : hasSavedTrip()));
   const [scanning, setScanning] = useState(false);
   const [notice, setNotice] = useState(null);
   const [notify, setNotify] = useState({ enabled: false, minutes: 10, message: null });
@@ -70,8 +72,8 @@ export default function MyTicketPage() {
   const now = realNow + (demo ? clockOffset : 0);
 
   useEffect(() => {
-    if (DEMO_ENABLED) import('../dev/ticketDemo.jsx').then(setDemoKit);
-  }, []);
+    if (demoEnabled) import('../dev/ticketDemo.jsx').then(setDemoKit);
+  }, [demoEnabled]);
 
   const startDemo = useCallback(
     (id, clockMin) => {
@@ -84,6 +86,7 @@ export default function MyTicketPage() {
     [demoKit],
   );
   const exitDemo = () => {
+    if (demoMode) return navigate('mi-billete'); // «Billete prueba» siempre es demo
     setDemo(null);
     setClockOffset(0);
   };
@@ -91,9 +94,9 @@ export default function MyTicketPage() {
   // ?demo=1 (o ?demo=<escenario>) abre la demo al entrar; ?hora=HH:MM fija el reloj simulado.
   useEffect(() => {
     if (!demoKit) return;
-    const id = demoKit.scenarioFromUrl();
+    const id = demoKit.scenarioFromUrl() ?? (demoMode ? 'normal' : null);
     if (id) startDemo(id, demoKit.clockFromUrl() ?? undefined);
-  }, [demoKit, startDemo]);
+  }, [demoKit, startDemo, demoMode]);
 
   useEffect(() => {
     loadTimetable().then(setTimetable, () => setNotice('No hemos podido cargar los horarios de Renfe. Ejecuta «npm run data».'));
@@ -143,16 +146,17 @@ export default function MyTicketPage() {
   // «Recordar este viaje»: se guarda solo el itinerario mínimo y se borra cuando el viaje termina.
   // (La demo nunca toca lo guardado en el dispositivo.)
   useEffect(() => {
-    if (demo) return;
+    if (demo || demoMode) return;
     if (remember && ticket && tl) saveTrip(ticket, tl.endsAt);
     if (!remember) clearTrip();
-  }, [remember, ticket, tl, demo]);
-  const finished = !demo && tl && now > tl.endsAt + 30 * 60_000;
+  }, [remember, ticket, tl, demo, demoMode]);
+  const finished = !demo && !demoMode && tl && now > tl.endsAt + 30 * 60_000;
   useEffect(() => {
     if (finished) clearTrip();
   }, [finished]);
 
   const forget = () => {
+    if (demoMode) return exitDemo(); // en la prueba no hay billete real que borrar
     exitDemo();
     clearTrip();
     setTicket(null);
@@ -212,10 +216,22 @@ export default function MyTicketPage() {
   };
 
   return (
-    <section className="page my-ticket" id="mi-billete">
+    <section className="page my-ticket" id={demoMode ? 'billete-prueba' : 'mi-billete'}>
       <div className="page-head">
-        <h1>Mi billete</h1>
-        <p>Introduce tu billete de tren y te enseñamos tu viaje: los trenes que tienes que coger, los transbordos y cuánto falta para tu próximo tren.</p>
+        {demoMode ? (
+          <>
+            <h1>Billete de prueba</h1>
+            <p>
+              Un viaje de ejemplo con datos ficticios para ver cómo funciona «Mi billete». Elige un escenario (retraso, transbordo perdido,
+              tren cancelado…) y mueve la hora simulada para ver la cuenta atrás en cada momento.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1>Mi billete</h1>
+            <p>Introduce tu billete de tren y te enseñamos tu viaje: los trenes que tienes que coger, los transbordos y cuánto falta para tu próximo tren.</p>
+          </>
+        )}
       </div>
 
       {demo && demoKit && (
@@ -228,7 +244,9 @@ export default function MyTicketPage() {
         />
       )}
 
-      {!itinerary && (
+      {demoMode && !itinerary && <p className="empty">Cargando el viaje de ejemplo…</p>}
+
+      {!itinerary && !demoMode && (
         <div className="ticket-entry">
           <div className="card ticket-card">
             <h2>Escribe los datos del billete</h2>
